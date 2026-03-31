@@ -1,5 +1,19 @@
+/** 可命名的厂商 API 预设（Base URL + Key） */
+export interface ApiPreset {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  /** 该预设下同时进行的流式请求上限（参赛 / Judge / 汇总共用） */
+  concurrency: number;
+  /** 手动保存的模型 ID，与「获取模型列表」结果合并到下拉框 */
+  manualModelIds: string[];
+}
+
 export interface ModelEntry {
   id: string;
+  /** 使用哪一套 API 预设 */
+  presetId: string;
   modelId: string;
   sampleCount: number;
 }
@@ -7,6 +21,7 @@ export interface ModelEntry {
 export interface JudgeConfig {
   id: string;
   name: string;
+  presetId: string;
   model: string;
   systemPrompt: string;
   userPromptTemplate: string;
@@ -15,54 +30,71 @@ export interface JudgeConfig {
 
 export interface AggregatorConfig {
   enabled: boolean;
+  presetId: string;
   model: string;
   systemPrompt: string;
   userPromptTemplate: string;
 }
 
 export interface GlobalSettings {
-  baseUrl: string;
-  apiKey: string;
-  temperature: number;
-  maxTokens: number;
-  topP: number;
-  concurrency: number;
+  apiPresets: ApiPreset[];
+  /** 留空则不传给 API，由上游默认值决定 */
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
   models: ModelEntry[];
   judges: JudgeConfig[];
   aggregator: AggregatorConfig;
-}
-
-export interface ParsedScore {
-  overall?: number;
-  dimensions?: Record<string, number>;
-  raw?: Record<string, unknown>;
 }
 
 export interface JudgeRunResult {
   judgeId: string;
   judgeName: string;
   reviewIndex: number;
+  /** 评委输出正文（传给汇总，不含思考） */
   rawText: string;
-  parsed?: ParsedScore;
-  parseError?: string;
+  /** 思考过程（展示用，不传下游） */
+  reasoningText?: string;
 }
+
+/** 单条生成线程在流水线中的阶段 */
+export type ThreadPhase =
+  | "generating"
+  | "judging"
+  | "aggregating"
+  | "done";
 
 export interface GenerationResult {
   id: string;
   modelId: string;
   sampleIndex: number;
+  /** 模型回答正文（传给 Judge/汇总，不含思考） */
   text: string;
+  /** 思考内容（展示用） */
+  reasoningText?: string;
   judgeRuns: JudgeRunResult[];
+  /** 汇总正文 */
   aggregateText: string;
-  aggregateParsed?: ParsedScore;
-  aggregateParseError?: string;
+  /** 汇总思考（展示用） */
+  aggregateReasoningText?: string;
+  threadPhase: ThreadPhase;
+}
+
+/** 单线程人工填分：每个评委一条 + 人类分 */
+export interface ThreadScoreInput {
+  judgeScores: Record<string, number | undefined>;
+  human?: number;
+}
+
+/** 分数计算器：参赛模型权重 + 人类分权重（均 0.1–1） */
+export interface BlendWeights {
+  modelWeights: Record<string, number>;
+  humanWeight: number;
 }
 
 export type RunPhase =
   | "idle"
-  | "generating"
-  | "judging"
-  | "aggregating"
+  | "running"
   | "done"
   | "error";
 
@@ -73,6 +105,4 @@ export interface RunSession {
   phase: RunPhase;
   generations: GenerationResult[];
   error?: string;
-  /** Live progress text for current streaming op */
-  streamPreview?: string;
 }
