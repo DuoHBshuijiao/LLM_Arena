@@ -1,4 +1,5 @@
 import type { ChatCompletionCreateParams } from "./openaiTypes";
+import { normalizeProxyBaseUrl } from "./apiModels";
 
 const PROXY_PATH = "/api/proxy/v1/chat/completions";
 
@@ -9,46 +10,60 @@ export interface ChatMessage {
   content: string;
 }
 
-/** Accumulate assistant delta text from OpenAI-compatible SSE. */
+export interface StreamDelta {
+  content: string;
+  reasoning: string;
+}
+
+function deltaReasoningPiece(delta: Record<string, unknown>): string {
+  const r = delta.reasoning_content ?? delta.reasoning ?? delta.thinking;
+  return typeof r === "string" ? r : "";
+}
+
+/** Accumulate assistant delta text + reasoning from OpenAI-compatible SSE. */
 export async function streamChat(
   baseUrl: string,
   apiKey: string,
   body: Omit<ChatCompletionCreateParams, "stream">,
-  onDelta: (chunk: string) => void,
+  onDelta: (chunk: StreamDelta) => void,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<StreamDelta> {
   const res = await fetch(PROXY_PATH, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Proxy-Base-URL": baseUrl.replace(/\/$/, ""),
+      "X-Proxy-Base-URL": normalizeProxyBaseUrl(baseUrl),
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ ...body, stream: true }),
     signal,
   });
 
-  const text = await readSSEText(res, onDelta);
+  const out = await readSSEText(res, onDelta);
   if (!res.ok) {
-    throw new Error(text.slice(0, 2000) || `HTTP ${res.status}`);
+    throw new Error(
+      (out.content + out.reasoning).slice(0, 2000) || `HTTP ${res.status}`,
+    );
   }
-  return text;
+  return out;
 }
 
 async function readSSEText(
   res: Response,
-  onDelta: (chunk: string) => void,
-): Promise<string> {
+  onDelta: (chunk: StreamDelta) => void,
+): Promise<StreamDelta> {
+  let fullContent = "";
+  let fullReasoning = "";
+
   if (!res.body) {
     const t = await res.text();
     if (!res.ok) throw new Error(t.slice(0, 2000) || `HTTP ${res.status}`);
-    return t;
+    return { content: t, reasoning: "" };
   }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let full = "";
 
   try {
     for (;;) {
@@ -65,12 +80,23 @@ async function readSSEText(
         if (data === "[DONE]") continue;
         try {
           const json = JSON.parse(data) as {
-            choices?: Array<{ delta?: { content?: string } }>;
+            choices?: Array<{
+              delta?: Record<string, unknown>;
+            }>;
           };
-          const piece = json.choices?.[0]?.delta?.content ?? "";
-          if (piece) {
-            full += piece;
-            onDelta(piece);
+          const delta = json.choices?.[0]?.delta;
+          if (!delta || typeof delta !== "object") continue;
+          const d = delta as Record<string, unknown>;
+          const content =
+            typeof d.content === "string" ? d.content : "";
+          const reasoning = deltaReasoningPiece(d);
+          if (content) {
+            fullContent += content;
+            onDelta({ content, reasoning: "" });
+          }
+          if (reasoning) {
+            fullReasoning += reasoning;
+            onDelta({ content: "", reasoning });
           }
         } catch {
           /* ignore partial JSON lines */
@@ -82,7 +108,9 @@ async function readSSEText(
   }
 
   if (!res.ok) {
-    throw new Error(full.slice(0, 2000) || `HTTP ${res.status}`);
+    throw new Error(
+      (fullContent + fullReasoning).slice(0, 2000) || `HTTP ${res.status}`,
+    );
   }
-  return full;
+  return { content: fullContent, reasoning: fullReasoning };
 }

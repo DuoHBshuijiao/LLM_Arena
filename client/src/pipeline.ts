@@ -1,6 +1,6 @@
 import pLimit from "p-limit";
 import { streamChat } from "./openaiStream";
-import { parseAggregatorScore, parseJudgeScore } from "./parseJson";
+import { getPreset } from "./settingsHelpers";
 import type {
   GenerationResult,
   GlobalSettings,
@@ -8,31 +8,92 @@ import type {
   RunSession,
 } from "./types";
 
-function upsertJudgeRun(
-  runs: JudgeRunResult[],
+function presetOrThrow(settings: GlobalSettings, presetId: string) {
+  const p = getPreset(settings, presetId);
+  if (!p) throw new Error(`未找到 API 预设：${presetId}`);
+  return p;
+}
+
+/** 每个 API 预设一条并发槽（本次评测内共享） */
+function buildPresetLimiters(
+  settings: GlobalSettings,
+): Map<string, ReturnType<typeof pLimit>> {
+  const m = new Map<string, ReturnType<typeof pLimit>>();
+  for (const p of settings.apiPresets) {
+    m.set(p.id, pLimit(Math.max(1, p.concurrency)));
+  }
+  return m;
+}
+
+function runLimited<T>(
+  limiters: Map<string, ReturnType<typeof pLimit>>,
+  presetId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lim = limiters.get(presetId);
+  if (!lim) throw new Error(`未找到预设 limiter：${presetId}`);
+  return lim(fn);
+}
+
+/** 仅包含已填写的采样参数，空则省略键 */
+function samplingParams(settings: GlobalSettings): {
+  temperature?: number;
+  max_tokens?: number;
+  top_p?: number;
+} {
+  const o: {
+    temperature?: number;
+    max_tokens?: number;
+    top_p?: number;
+  } = {};
+  const { temperature, maxTokens, topP } = settings;
+  if (temperature !== undefined && !Number.isNaN(temperature)) {
+    o.temperature = temperature;
+  }
+  if (maxTokens !== undefined && !Number.isNaN(maxTokens)) {
+    o.max_tokens = maxTokens;
+  }
+  if (topP !== undefined && !Number.isNaN(topP)) {
+    o.top_p = topP;
+  }
+  return o;
+}
+
+function judgeScratchKey(
+  gi: number,
   judgeId: string,
-  judgeName: string,
   reviewIndex: number,
-  rawText: string,
-  parsed?: import("./types").ParsedScore,
-  parseError?: string,
+): string {
+  return `${gi}|${judgeId}|${reviewIndex}`;
+}
+
+function rebuildJudgeRunsFromScratch(
+  gi: number,
+  scratch: Map<string, { raw: string; reasoning: string }>,
+  settings: GlobalSettings,
 ): JudgeRunResult[] {
-  const key = `${judgeId}:${reviewIndex}`;
-  const rest = runs.filter((r) => `${r.judgeId}:${r.reviewIndex}` !== key);
-  rest.push({
-    judgeId,
-    judgeName,
-    reviewIndex,
-    rawText,
-    parsed,
-    parseError,
-  });
-  rest.sort((a, b) => {
+  const out: JudgeRunResult[] = [];
+  for (const judge of settings.judges) {
+    for (let r = 0; r < Math.max(1, judge.reviewCount); r++) {
+      const key = judgeScratchKey(gi, judge.id, r);
+      const s = scratch.get(key);
+      if (s && (s.raw.length > 0 || s.reasoning.length > 0)) {
+        out.push({
+          judgeId: judge.id,
+          judgeName: judge.name,
+          reviewIndex: r,
+          rawText: s.raw,
+          reasoningText: s.reasoning ? s.reasoning : undefined,
+        });
+      }
+    }
+  }
+  out.sort((a, b) => {
     const c = a.judgeId.localeCompare(b.judgeId);
     if (c !== 0) return c;
     return a.reviewIndex - b.reviewIndex;
   });
-  return rest;
+  return out;
 }
 
 export async function executeEvaluation(
@@ -45,14 +106,19 @@ export async function executeEvaluation(
     id: crypto.randomUUID(),
     prompt,
     startedAt: Date.now(),
-    phase: "generating",
+    phase: "running",
     generations: [],
   };
 
-  const tasks: { modelId: string; sampleIndex: number }[] = [];
+  const tasks: { modelId: string; sampleIndex: number; presetId: string }[] =
+    [];
   for (const m of settings.models) {
     for (let i = 0; i < Math.max(1, m.sampleCount); i++) {
-      tasks.push({ modelId: m.modelId, sampleIndex: i });
+      tasks.push({
+        modelId: m.modelId,
+        sampleIndex: i,
+        presetId: m.presetId,
+      });
     }
   }
 
@@ -63,132 +129,127 @@ export async function executeEvaluation(
     text: "",
     judgeRuns: [],
     aggregateText: "",
+    threadPhase: "generating",
   }));
+
+  const limiters = buildPresetLimiters(settings);
+  const judgeScratch = new Map<string, { raw: string; reasoning: string }>();
 
   onUpdate({ ...base, generations: [...gens] });
 
-  const limit = pLimit(Math.max(1, settings.concurrency));
+  const runThread = async (i: number) => {
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const t = tasks[i];
+    const preset = presetOrThrow(settings, t.presetId);
 
-  await Promise.all(
-    tasks.map((t, i) =>
-      limit(async () => {
-        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-        let text = "";
-        await streamChat(
-          settings.baseUrl,
-          settings.apiKey,
-          {
-            model: t.modelId,
-            messages: [{ role: "user", content: prompt }],
-            temperature: settings.temperature,
-            max_tokens: settings.maxTokens,
-            top_p: settings.topP,
-          },
-          (c) => {
-            text += c;
-            const next = gens.map((g, gi) =>
-              gi === i ? { ...g, text } : g,
-            );
-            onUpdate({
-              ...base,
-              phase: "generating",
-              generations: next,
-              streamPreview: text.slice(-600),
-            });
-          },
-          signal,
-        );
-        gens[i] = { ...gens[i], text };
-        onUpdate({
-          ...base,
-          phase: "generating",
-          generations: [...gens],
-        });
-      }),
-    ),
-  );
+    let text = "";
+    let reasoningText = "";
 
-  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    await runLimited(limiters, t.presetId, async () => {
+      await streamChat(
+        preset.baseUrl,
+        preset.apiKey,
+        {
+          model: t.modelId,
+          messages: [{ role: "user", content: prompt }],
+          ...samplingParams(settings),
+        },
+        (d) => {
+          text += d.content;
+          reasoningText += d.reasoning;
+          gens[i] = {
+            ...gens[i],
+            text,
+            reasoningText: reasoningText || undefined,
+            threadPhase: "generating",
+          };
+          onUpdate({ ...base, phase: "running", generations: [...gens] });
+        },
+        signal,
+      );
+    });
 
-  onUpdate({ ...base, phase: "judging", generations: [...gens], streamPreview: undefined });
+    gens[i] = {
+      ...gens[i],
+      text,
+      reasoningText: reasoningText || undefined,
+      threadPhase: "judging",
+    };
+    onUpdate({ ...base, phase: "running", generations: [...gens] });
 
-  for (let gi = 0; gi < gens.length; gi++) {
+    const judgePromises: Promise<void>[] = [];
     for (const judge of settings.judges) {
       for (let r = 0; r < Math.max(1, judge.reviewCount); r++) {
-        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-        const userContent = judge.userPromptTemplate.replace(
-          /\{\{candidate\}\}/g,
-          gens[gi].text,
-        );
-        let jr = "";
-        await streamChat(
-          settings.baseUrl,
-          settings.apiKey,
-          {
-            model: judge.model,
-            messages: [
-              { role: "system", content: judge.systemPrompt },
-              { role: "user", content: userContent },
-            ],
-            temperature: settings.temperature,
-            max_tokens: settings.maxTokens,
-            top_p: settings.topP,
-          },
-          (c) => {
-            jr += c;
-            const cur = gens[gi];
-            const runs = upsertJudgeRun(
-              cur.judgeRuns,
-              judge.id,
-              judge.name,
-              r,
-              jr,
+        judgePromises.push(
+          runLimited(limiters, judge.presetId, async () => {
+            const jp = presetOrThrow(settings, judge.presetId);
+            const userContent = judge.userPromptTemplate.replace(
+              /\{\{candidate\}\}/g,
+              gens[i].text,
             );
-            gens[gi] = { ...cur, judgeRuns: runs };
-            onUpdate({
-              ...base,
-              phase: "judging",
-              generations: [...gens],
-              streamPreview: jr.slice(-500),
-            });
-          },
-          signal,
+            const sk = judgeScratchKey(i, judge.id, r);
+            if (!judgeScratch.has(sk)) {
+              judgeScratch.set(sk, { raw: "", reasoning: "" });
+            }
+            let jr = "";
+            let jrReason = "";
+            await streamChat(
+              jp.baseUrl,
+              jp.apiKey,
+              {
+                model: judge.model,
+                messages: [
+                  { role: "system", content: judge.systemPrompt },
+                  { role: "user", content: userContent },
+                ],
+                ...samplingParams(settings),
+              },
+              (d) => {
+                jr += d.content;
+                jrReason += d.reasoning;
+                const slot = judgeScratch.get(sk)!;
+                slot.raw = jr;
+                slot.reasoning = jrReason;
+                gens[i] = {
+                  ...gens[i],
+                  judgeRuns: rebuildJudgeRunsFromScratch(
+                    i,
+                    judgeScratch,
+                    settings,
+                  ),
+                };
+                onUpdate({ ...base, phase: "running", generations: [...gens] });
+              },
+              signal,
+            );
+            const slot = judgeScratch.get(sk)!;
+            slot.raw = jr;
+            slot.reasoning = jrReason;
+            gens[i] = {
+              ...gens[i],
+              judgeRuns: rebuildJudgeRunsFromScratch(
+                i,
+                judgeScratch,
+                settings,
+              ),
+            };
+            onUpdate({ ...base, phase: "running", generations: [...gens] });
+          }),
         );
-        const pr = parseJudgeScore(jr);
-        gens[gi] = {
-          ...gens[gi],
-          judgeRuns: upsertJudgeRun(
-            gens[gi].judgeRuns,
-            judge.id,
-            judge.name,
-            r,
-            jr,
-            pr.parsed,
-            pr.error,
-          ),
-        };
-        onUpdate({ ...base, phase: "judging", generations: [...gens] });
       }
     }
-  }
+    await Promise.all(judgePromises);
 
-  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    if (!settings.aggregator.enabled) {
+      gens[i] = { ...gens[i], threadPhase: "done" };
+      onUpdate({ ...base, phase: "running", generations: [...gens] });
+      return;
+    }
 
-  if (!settings.aggregator.enabled) {
-    onUpdate({
-      ...base,
-      phase: "done",
-      generations: [...gens],
-      streamPreview: undefined,
-    });
-    return;
-  }
+    gens[i] = { ...gens[i], threadPhase: "aggregating" };
+    onUpdate({ ...base, phase: "running", generations: [...gens] });
 
-  onUpdate({ ...base, phase: "aggregating", generations: [...gens], streamPreview: undefined });
-
-  for (let gi = 0; gi < gens.length; gi++) {
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const g = gens[gi];
+    const g = gens[i];
     const reviewsText = g.judgeRuns
       .map(
         (jr) =>
@@ -199,52 +260,52 @@ export async function executeEvaluation(
       .replace(/\{\{candidate\}\}/g, g.text)
       .replace(/\{\{reviews\}\}/g, reviewsText);
 
+    const aggPreset = presetOrThrow(settings, settings.aggregator.presetId);
     let agg = "";
-    await streamChat(
-      settings.baseUrl,
-      settings.apiKey,
-      {
-        model: settings.aggregator.model,
-        messages: [
-          { role: "system", content: settings.aggregator.systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: settings.temperature,
-        max_tokens: settings.maxTokens,
-        top_p: settings.topP,
-      },
-      (c) => {
-        agg += c;
-        const pr = parseAggregatorScore(agg);
-        gens[gi] = {
-          ...gens[gi],
-          aggregateText: agg,
-          aggregateParsed: pr.parsed,
-          aggregateParseError: pr.error,
-        };
-        onUpdate({
-          ...base,
-          phase: "aggregating",
-          generations: [...gens],
-          streamPreview: agg.slice(-500),
-        });
-      },
-      signal,
-    );
-    const pr = parseAggregatorScore(agg);
-    gens[gi] = {
-      ...gens[gi],
+    let aggReason = "";
+
+    await runLimited(limiters, settings.aggregator.presetId, async () => {
+      await streamChat(
+        aggPreset.baseUrl,
+        aggPreset.apiKey,
+        {
+          model: settings.aggregator.model,
+          messages: [
+            { role: "system", content: settings.aggregator.systemPrompt },
+            { role: "user", content: userContent },
+          ],
+          ...samplingParams(settings),
+        },
+        (d) => {
+          agg += d.content;
+          aggReason += d.reasoning;
+          gens[i] = {
+            ...gens[i],
+            aggregateText: agg,
+            aggregateReasoningText: aggReason || undefined,
+          };
+          onUpdate({ ...base, phase: "running", generations: [...gens] });
+        },
+        signal,
+      );
+    });
+
+    gens[i] = {
+      ...gens[i],
       aggregateText: agg,
-      aggregateParsed: pr.parsed,
-      aggregateParseError: pr.error,
+      aggregateReasoningText: aggReason || undefined,
+      threadPhase: "done",
     };
-    onUpdate({ ...base, phase: "aggregating", generations: [...gens] });
-  }
+    onUpdate({ ...base, phase: "running", generations: [...gens] });
+  };
+
+  await Promise.all(tasks.map((_, i) => runThread(i)));
+
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 
   onUpdate({
     ...base,
     phase: "done",
     generations: [...gens],
-    streamPreview: undefined,
   });
 }
