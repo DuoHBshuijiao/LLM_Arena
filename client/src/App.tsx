@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import { ChartsPanel } from "./components/ChartsPanel";
-import { ResultsPanel } from "./components/ResultsPanel";
 import { RunPanel } from "./components/RunPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useArenaStore } from "./store";
 
-type Tab = "settings" | "run" | "results" | "charts";
+type Tab = "settings" | "run" | "charts";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("settings");
@@ -15,7 +14,13 @@ export default function App() {
   const setSettings = useArenaStore((s) => s.setSettings);
   const lastRun = useArenaStore((s) => s.lastRun);
   const humanScores = useArenaStore((s) => s.humanScores);
+  const threadScores = useArenaStore((s) => s.threadScores);
+  const blendWeights = useArenaStore((s) => s.blendWeights);
   const updateHumanScore = useArenaStore((s) => s.updateHumanScore);
+  const setThreadJudgeScore = useArenaStore((s) => s.setThreadJudgeScore);
+  const setThreadHumanScore = useArenaStore((s) => s.setThreadHumanScore);
+  const setModelBlendWeight = useArenaStore((s) => s.setModelBlendWeight);
+  const setHumanBlendWeight = useArenaStore((s) => s.setHumanBlendWeight);
   const runEvaluation = useArenaStore((s) => s.runEvaluation);
   const cancelRun = useArenaStore((s) => s.cancelRun);
   const clearLastRun = useArenaStore((s) => s.clearLastRun);
@@ -33,7 +38,7 @@ export default function App() {
     lastRun.phase !== "error";
 
   return (
-    <div className="app">
+    <div className={`app ${tab === "run" ? "app--wide" : ""}`}>
       <header className="app-header">
         <h1>LLM Arena</h1>
         <span className="badge">
@@ -48,8 +53,7 @@ export default function App() {
           {(
             [
               ["settings", "设置"],
-              ["run", "运行"],
-              ["results", "结果"],
+              ["run", "运行与结果"],
               ["charts", "人工与图表"],
             ] as const
           ).map(([id, label]) => (
@@ -71,30 +75,28 @@ export default function App() {
       {tab === "run" && (
         <RunPanel
           settings={settings}
-          onRun={async (p) => {
-            await runEvaluation(p);
-            setTab("results");
-          }}
+          session={lastRun}
+          threadScores={threadScores}
+          blendWeights={blendWeights}
+          setThreadJudgeScore={setThreadJudgeScore}
+          setThreadHumanScore={setThreadHumanScore}
+          setModelBlendWeight={setModelBlendWeight}
+          setHumanBlendWeight={setHumanBlendWeight}
+          onRun={(p) => runEvaluation(p)}
           onCancel={cancelRun}
+          onClearSession={clearLastRun}
           running={running}
           phase={lastRun?.phase ?? "idle"}
         />
-      )}
-      {tab === "results" && (
-        <>
-          <div style={{ marginBottom: "0.5rem" }}>
-            <button type="button" className="btn-ghost" onClick={clearLastRun}>
-              清空结果（同步 localStorage）
-            </button>
-          </div>
-          <ResultsPanel session={lastRun} />
-        </>
       )}
       {tab === "charts" && (
         <ChartsPanel
           generations={lastRun?.generations ?? []}
           humanScores={humanScores}
           onHumanChange={updateHumanScore}
+          threadScores={threadScores}
+          blendWeights={blendWeights}
+          judgeIds={settings.judges.map((j) => j.id)}
         />
       )}
     </div>

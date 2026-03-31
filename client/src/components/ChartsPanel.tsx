@@ -9,21 +9,36 @@ import {
   YAxis,
 } from "recharts";
 import { averageAutoScoreByModel, uniqueModelIds } from "../chartUtils";
-import type { GenerationResult } from "../types";
+import type {
+  BlendWeights,
+  GenerationResult,
+  ThreadScoreInput,
+} from "../types";
 
 interface Props {
   generations: GenerationResult[];
   humanScores: Record<string, number>;
   onHumanChange: (modelId: string, score: number | undefined) => void;
+  threadScores: Record<string, ThreadScoreInput | undefined>;
+  blendWeights: BlendWeights;
+  judgeIds: string[];
 }
 
 export function ChartsPanel({
   generations,
   humanScores,
   onHumanChange,
+  threadScores,
+  blendWeights,
+  judgeIds,
 }: Props) {
   const modelIds = uniqueModelIds(generations);
-  const autoMap = averageAutoScoreByModel(generations);
+  const autoMap = averageAutoScoreByModel(
+    generations,
+    threadScores,
+    judgeIds,
+    blendWeights,
+  );
 
   const rows = modelIds.map((id) => ({
     model: id.length > 24 ? `${id.slice(0, 22)}…` : id,
@@ -44,8 +59,7 @@ export function ChartsPanel({
     <div className="panel">
       <h2>人工分与图表</h2>
       <p className="muted">
-        每个<strong>模型</strong>填写一条人工「生成分」（与计划中「每模型一条」一致）；图表对比
-        自动汇总 overall（多样本取平均）与人工分。
+        每个<strong>模型</strong>填写一条人工「生成分」；图表对比「运行页」中按计算器得到的线程综合分（多样本取平均）与人工分。
       </p>
 
       {!hasAny && (
@@ -99,10 +113,10 @@ export function ChartsPanel({
           <div style={{ width: "100%", height: 360 }}>
             <ResponsiveContainer>
               <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 48 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2a3140" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#d8dce6" />
                 <XAxis
                   dataKey="name"
-                  tick={{ fill: "#9aa4b5", fontSize: 11 }}
+                  tick={{ fill: "#5c6578", fontSize: 11 }}
                   interval={0}
                   angle={-25}
                   textAnchor="end"
@@ -110,13 +124,13 @@ export function ChartsPanel({
                 />
                 <YAxis
                   domain={[0, 10]}
-                  tick={{ fill: "#9aa4b5", fontSize: 11 }}
+                  tick={{ fill: "#5c6578", fontSize: 11 }}
                 />
                 <Tooltip
                   contentStyle={{
-                    background: "#161a22",
-                    border: "1px solid #2a3140",
-                    color: "#e8eaed",
+                    background: "#fff",
+                    border: "1px solid #d8dce6",
+                    color: "#1a1d24",
                   }}
                 />
                 <Legend />
