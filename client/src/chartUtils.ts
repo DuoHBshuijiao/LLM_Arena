@@ -16,3 +16,29 @@ export function uniqueModelIds(generations: GenerationResult[]): string[] {
   for (const g of generations) s.add(g.modelId);
   return [...s].sort();
 }
+
+export type SortDirection = "asc" | "desc";
+
+function isMissingScore(v: number | null | undefined): boolean {
+  return v === undefined || v === null || Number.isNaN(v);
+}
+
+/** 按数值排序 modelId；缺失分置底，同分按 modelId 字典序稳定次序。 */
+export function sortModelIdsByValue(
+  modelIds: string[],
+  getValue: (id: string) => number | undefined | null,
+  direction: SortDirection,
+): string[] {
+  return [...modelIds].sort((a, b) => {
+    const va = getValue(a);
+    const vb = getValue(b);
+    const ma = isMissingScore(va);
+    const mb = isMissingScore(vb);
+    if (ma && mb) return a.localeCompare(b);
+    if (ma) return 1;
+    if (mb) return -1;
+    const cmp = (va as number) - (vb as number);
+    if (cmp !== 0) return direction === "asc" ? cmp : -cmp;
+    return a.localeCompare(b);
+  });
+}

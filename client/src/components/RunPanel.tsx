@@ -1,5 +1,9 @@
 import { useId, useMemo, useState } from "react";
-import { uniqueModelIds } from "../chartUtils";
+import {
+  sortModelIdsByValue,
+  uniqueModelIds,
+  type SortDirection,
+} from "../chartUtils";
 import {
   customEvaluationPresetsSafe,
   getEvaluationPresetSelectOptions,
@@ -101,6 +105,8 @@ export function RunPanel({
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [savingScores, setSavingScores] = useState(false);
   const [saveScoreMessage, setSaveScoreMessage] = useState<string | null>(null);
+  const [finalScoreSortDir, setFinalScoreSortDir] =
+    useState<SortDirection>("asc");
   const taskPromptFieldId = useId();
   const est = useMemo(() => estimateCalls(settings), [settings]);
   const ready = useMemo(() => settingsReadyForRun(settings), [settings]);
@@ -128,6 +134,16 @@ export function RunPanel({
   const modelIdsForFinalRows = useMemo(
     () => (session ? uniqueModelIds(session.generations) : []),
     [session],
+  );
+
+  const sortedFinalModelIds = useMemo(
+    () =>
+      sortModelIdsByValue(
+        modelIdsForFinalRows,
+        (id) => finalScoreByModel[id] ?? null,
+        finalScoreSortDir,
+      ),
+    [modelIdsForFinalRows, finalScoreByModel, finalScoreSortDir],
   );
 
   const canSaveScores =
@@ -358,7 +374,41 @@ export function RunPanel({
                 </p>
               )}
               <div className="score-calculator__final score-calculator__final--table-wrap">
-                <div className="score-calculator__final-heading">本会话最终得分（按模型）</div>
+                <div className="score-calculator__final-head">
+                  <div className="score-calculator__final-heading">
+                    本会话最终得分（按模型）
+                  </div>
+                  {modelIdsForFinalRows.length > 0 ? (
+                    <div
+                      className="score-calculator__final-sort"
+                      role="group"
+                      aria-label="按得分排序"
+                    >
+                      <button
+                        type="button"
+                        className={
+                          finalScoreSortDir === "asc"
+                            ? "btn-ghost btn-sm score-calculator__final-sort-btn score-calculator__final-sort-btn--active"
+                            : "btn-ghost btn-sm score-calculator__final-sort-btn"
+                        }
+                        onClick={() => setFinalScoreSortDir("asc")}
+                      >
+                        升序
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          finalScoreSortDir === "desc"
+                            ? "btn-ghost btn-sm score-calculator__final-sort-btn score-calculator__final-sort-btn--active"
+                            : "btn-ghost btn-sm score-calculator__final-sort-btn"
+                        }
+                        onClick={() => setFinalScoreSortDir("desc")}
+                      >
+                        降序
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
                 {modelIdsForFinalRows.length === 0 ? (
                   <p className="muted score-calculator__final-empty">
                     完成评测并在线程中填写分数后显示。
@@ -372,7 +422,7 @@ export function RunPanel({
                       </tr>
                     </thead>
                     <tbody>
-                      {modelIdsForFinalRows.map((mid) => {
+                      {sortedFinalModelIds.map((mid) => {
                         const v = finalScoreByModel[mid];
                         return (
                           <tr key={mid}>

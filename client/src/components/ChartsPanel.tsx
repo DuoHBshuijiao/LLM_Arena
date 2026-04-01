@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { clampScore10 } from "../errorUtils";
 import {
   Bar,
@@ -9,7 +10,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { averageAutoScoreByModel, uniqueModelIds } from "../chartUtils";
+import {
+  averageAutoScoreByModel,
+  sortModelIdsByValue,
+  uniqueModelIds,
+  type SortDirection,
+} from "../chartUtils";
 import {
   downloadBundleJson,
   downloadSnapshotJson,
@@ -53,6 +59,8 @@ function promptSnippet(prompt: string, max = 48): string {
   return `${t.slice(0, max)}…`;
 }
 
+type ChartsSortKey = "auto" | "human" | "model";
+
 export function ChartsPanel({
   generations,
   humanScores,
@@ -63,6 +71,9 @@ export function ChartsPanel({
   readOnly = false,
   historyPanel,
 }: Props) {
+  const [chartsSortKey, setChartsSortKey] = useState<ChartsSortKey>("model");
+  const [chartsSortDir, setChartsSortDir] = useState<SortDirection>("asc");
+
   const modelIds = uniqueModelIds(generations);
   const autoMap = averageAutoScoreByModel(
     generations,
@@ -71,14 +82,34 @@ export function ChartsPanel({
     blendWeights,
   );
 
-  const rows = modelIds.map((id) => ({
+  const sortedModelIds = useMemo(() => {
+    if (chartsSortKey === "model") {
+      return [...modelIds].sort((a, b) =>
+        chartsSortDir === "asc" ? a.localeCompare(b) : b.localeCompare(a),
+      );
+    }
+    if (chartsSortKey === "auto") {
+      return sortModelIdsByValue(
+        modelIds,
+        (id) => autoMap[id] ?? null,
+        chartsSortDir,
+      );
+    }
+    return sortModelIdsByValue(
+      modelIds,
+      (id) => humanScores[id] ?? null,
+      chartsSortDir,
+    );
+  }, [modelIds, chartsSortKey, chartsSortDir, autoMap, humanScores]);
+
+  const rows = sortedModelIds.map((id) => ({
     model: id.length > 24 ? `${id.slice(0, 22)}…` : id,
     modelId: id,
     auto: autoMap[id],
     human: humanScores[id],
   }));
 
-  const chartData = modelIds.map((id) => ({
+  const chartData = sortedModelIds.map((id) => ({
     name: id.length > 16 ? `${id.slice(0, 14)}…` : id,
     自动汇总: autoMap[id] ?? null,
     人工分: humanScores[id] ?? null,
@@ -236,6 +267,54 @@ export function ChartsPanel({
 
       {hasAny && (
         <>
+          <div className="charts-panel__sort-row">
+            <label className="charts-panel__sort-label" htmlFor="charts-sort-key">
+              排序
+            </label>
+            <select
+              id="charts-sort-key"
+              className="charts-panel__sort-select"
+              disabled={readOnly}
+              value={chartsSortKey}
+              onChange={(e) =>
+                setChartsSortKey(e.target.value as ChartsSortKey)
+              }
+            >
+              <option value="model">按模型</option>
+              <option value="auto">按自动汇总</option>
+              <option value="human">按整体验收人工分</option>
+            </select>
+            <div
+              className="charts-panel__sort-dir"
+              role="group"
+              aria-label="升序或降序"
+            >
+              <button
+                type="button"
+                className={
+                  chartsSortDir === "asc"
+                    ? "btn-ghost btn-sm charts-panel__sort-btn charts-panel__sort-btn--active"
+                    : "btn-ghost btn-sm charts-panel__sort-btn"
+                }
+                disabled={readOnly}
+                onClick={() => setChartsSortDir("asc")}
+              >
+                升序
+              </button>
+              <button
+                type="button"
+                className={
+                  chartsSortDir === "desc"
+                    ? "btn-ghost btn-sm charts-panel__sort-btn charts-panel__sort-btn--active"
+                    : "btn-ghost btn-sm charts-panel__sort-btn"
+                }
+                disabled={readOnly}
+                onClick={() => setChartsSortDir("desc")}
+              >
+                降序
+              </button>
+            </div>
+          </div>
           <div className="table-wrap charts-panel__table-wrap">
             <table>
               <caption className="visually-hidden">
