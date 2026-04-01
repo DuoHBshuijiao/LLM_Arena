@@ -10,6 +10,31 @@ import {
 
 const PROXY_PATH = "/api/proxy/v1/chat/completions";
 
+/** 本地代理 4xx/502 常返回 JSON，把 detail 展示给用户便于排查网络/Base URL */
+function messageFromProxyErrorBody(text: string, status: number): string {
+  const trimmed = text.trim();
+  let detail = "";
+  let main = "";
+  try {
+    const j = JSON.parse(trimmed) as Record<string, unknown>;
+    if (typeof j.detail === "string") detail = j.detail;
+    const err = j.error;
+    if (typeof err === "string") main = err;
+    else if (err && typeof err === "object" && err !== null && "message" in err) {
+      const m = (err as { message?: unknown }).message;
+      if (typeof m === "string") main = m;
+    }
+    if (typeof j.message === "string" && !main) main = j.message;
+  } catch {
+    /* 非 JSON */
+  }
+  if (main || detail) {
+    const s = [main, detail].filter(Boolean).join(": ");
+    return s.slice(0, 2000) || `HTTP ${status}`;
+  }
+  return trimmed.slice(0, 2000) || `HTTP ${status}`;
+}
+
 export type StreamRole = "system" | "user" | "assistant";
 
 export interface ChatMessage {
@@ -104,27 +129,27 @@ export async function streamChat(
     signal,
   });
 
-  const out = await readSSEText(res, onDelta);
-  if (!res.ok) {
-    throw new Error(
-      (out.content + out.reasoning).slice(0, 2000) || `HTTP ${res.status}`,
-    );
-  }
-  return out;
+  return readSSEText(res, onDelta, signal);
 }
 
 async function readSSEText(
   res: Response,
   onDelta: (chunk: StreamDelta) => void,
+  signal?: AbortSignal,
 ): Promise<StreamDelta> {
   const fullContent = { v: "" };
   const fullReasoning = { v: "" };
 
   if (!res.body) {
     const t = await res.text();
-    if (!res.ok) throw new Error(t.slice(0, 2000) || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(messageFromProxyErrorBody(t, res.status));
     const parsed = parseInlineThinkingFull(t);
     return { content: parsed.content, reasoning: parsed.reasoning };
+  }
+
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(messageFromProxyErrorBody(t, res.status));
   }
 
   const reader = res.body.getReader();
@@ -134,6 +159,9 @@ async function readSSEText(
 
   try {
     for (;;) {
+      if (signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -183,10 +211,5 @@ async function readSSEText(
     }
   }
 
-  if (!res.ok) {
-    throw new Error(
-      (fullContent.v + fullReasoning.v).slice(0, 2000) || `HTTP ${res.status}`,
-    );
-  }
   return { content: fullContent.v, reasoning: fullReasoning.v };
 }

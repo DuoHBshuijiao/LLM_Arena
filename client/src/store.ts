@@ -8,7 +8,13 @@ import {
   getEvaluationPresetById,
   getPoetryAggregatorPartial,
 } from "./evaluationPresets";
-import { executeEvaluation } from "./pipeline";
+import {
+  executeEvaluation,
+  requestAbortJudgeSlot,
+  requestCancelThread,
+  requestPauseThread,
+  resumeSingleThread,
+} from "./pipeline";
 import { DEFAULT_BLEND_WEIGHTS, normalizeBlendWeights } from "./scoreCalculations";
 import type {
   BlendWeights,
@@ -22,6 +28,48 @@ import type {
 
 function newId(): string {
   return crypto.randomUUID();
+}
+
+/** 用户已取消时，流水线仍可能通过 RAF 推送 phase:running，强制合并为已结束 */
+function mergeSessionIfAborted(
+  session: RunSession,
+  signal: AbortSignal,
+  /** 整轮评测仍在跑时，单线程 resume 被取消不得把会话打成 done */
+  fullRunActive?: boolean,
+): RunSession {
+  if (!signal.aborted) return session;
+  if (fullRunActive) {
+    return {
+      ...session,
+      phase: "running",
+      error: undefined,
+    };
+  }
+  return {
+    ...session,
+    phase: "done",
+    error: "已取消",
+  };
+}
+
+/** resume 的 onUpdate 快照含整表拷贝，仅合并目标 genId 对应列，避免覆盖其它仍在跑的线程 */
+function mergeResumeIntoLastRun(
+  current: RunSession | null,
+  incoming: RunSession,
+  genId: string,
+): RunSession | null {
+  if (!current) return incoming;
+  const idx = current.generations.findIndex((g) => g.id === genId);
+  if (idx < 0) return incoming;
+  const inc = incoming.generations[idx];
+  const cur = current.generations[idx];
+  if (!inc || !cur || inc.id !== cur.id) return incoming;
+  const nextGens = current.generations.map((g, i) => (i === idx ? inc : g));
+  return {
+    ...current,
+    ...incoming,
+    generations: nextGens,
+  };
 }
 
 function createDefaultSettings(): GlobalSettings {
@@ -78,7 +126,10 @@ function createDefaultSettings(): GlobalSettings {
 
 const defaultSettings: GlobalSettings = createDefaultSettings();
 
+/** 整轮「开始评测」的取消信号 */
 let abortRef: AbortController | null = null;
+/** 单线程「重试 / 恢复」专用，勿与 abortRef 混用，否则会误取消整轮评测 */
+let resumeAbortRef: AbortController | null = null;
 
 interface ArenaState {
   settings: GlobalSettings;
@@ -100,6 +151,16 @@ interface ArenaState {
   setJudgeBlendWeight: (judgeId: string, w: number) => void;
   setHumanBlendWeight: (w: number) => void;
   runEvaluation: (prompt: string) => Promise<void>;
+  resumeThreadEvaluation: (genId: string) => Promise<void>;
+  pauseThread: (genId: string) => void;
+  /** 仅中止某一 judge 槽位的流式请求（并行 judge 时其它槽位继续） */
+  abortJudgeSlot: (
+    genId: string,
+    judgeId: string,
+    reviewIndex: number,
+  ) => void;
+  cancelThread: (genId: string) => void;
+  abandonThread: (genId: string) => void;
   cancelRun: () => void;
   clearLastRun: () => void;
 }
@@ -174,9 +235,157 @@ export const useArenaStore = create<ArenaState>()(
 
       clearLastRun: () => set({ lastRun: null, threadScores: {} }),
 
+      abandonThread: (genId) =>
+        set((state) => {
+          const lr = state.lastRun;
+          if (!lr) return state;
+          return {
+            lastRun: {
+              ...lr,
+              generations: lr.generations.map((g) =>
+                g.id === genId
+                  ? {
+                      ...g,
+                      threadOutcome: "abandoned",
+                      threadPhase: "done",
+                      pipelineError: undefined,
+                      failedPipelineStep: undefined,
+                      pausedPipelineStep: undefined,
+                      streamingCard: undefined,
+                    }
+                  : g,
+              ),
+            },
+          };
+        }),
+
+      pauseThread: (genId) => {
+        requestPauseThread(genId);
+      },
+
+      abortJudgeSlot: (genId, judgeId, reviewIndex) => {
+        requestAbortJudgeSlot(genId, judgeId, reviewIndex);
+      },
+
+      cancelThread: (genId) => {
+        requestCancelThread(genId);
+      },
+
       cancelRun: () => {
         abortRef?.abort();
+        resumeAbortRef?.abort();
         abortRef = null;
+        resumeAbortRef = null;
+        set((state) => {
+          const lr = state.lastRun;
+          if (!lr || lr.phase !== "running") return state;
+          return {
+            lastRun: {
+              ...lr,
+              phase: "done",
+              error: "已取消",
+            },
+          };
+        });
+      },
+
+      resumeThreadEvaluation: async (genId) => {
+        const settings = get().settings;
+        const lastRun = get().lastRun;
+        if (!lastRun?.generations.length) return;
+
+        resumeAbortRef?.abort();
+        const resumeController = new AbortController();
+        resumeAbortRef = resumeController;
+        const signal = resumeController.signal;
+
+        try {
+          await resumeSingleThread(
+            settings,
+            lastRun.prompt,
+            (session) =>
+              set((state) => ({
+                lastRun: mergeResumeIntoLastRun(
+                  state.lastRun,
+                  mergeSessionIfAborted(
+                    session,
+                    signal,
+                    abortRef !== null,
+                  ),
+                  genId,
+                ),
+              })),
+            signal,
+            lastRun,
+            genId,
+            () => abortRef !== null,
+          );
+        } catch (e) {
+          if (e instanceof DOMException && e.name === "AbortError") {
+            set((st) => {
+              const cur = st.lastRun;
+              if (!cur) return { lastRun: null };
+              if (abortRef !== null) {
+                return {
+                  lastRun: {
+                    ...cur,
+                    phase: "running",
+                    error: undefined,
+                  },
+                };
+              }
+              return {
+                lastRun: {
+                  ...cur,
+                  phase: "done",
+                  error: "已取消",
+                },
+              };
+            });
+            return;
+          }
+          const msg = userFacingEvaluationError(e);
+          set((st) => {
+            if (!st.lastRun) return { lastRun: null };
+            if (abortRef !== null) {
+              const idx = st.lastRun.generations.findIndex((g) => g.id === genId);
+              if (idx < 0) {
+                return {
+                  lastRun: {
+                    ...st.lastRun,
+                    phase: "running",
+                    error: undefined,
+                  },
+                };
+              }
+              const nextGens = [...st.lastRun.generations];
+              nextGens[idx] = {
+                ...nextGens[idx],
+                pipelineError: msg,
+                threadOutcome: "error",
+                threadPhase: "error",
+                streamingCard: undefined,
+              };
+              return {
+                lastRun: {
+                  ...st.lastRun,
+                  phase: "running",
+                  error: undefined,
+                  generations: nextGens,
+                },
+              };
+            }
+            return {
+              lastRun: {
+                ...st.lastRun,
+                phase: "error",
+                error: msg,
+              },
+            };
+          });
+        } finally {
+          if (resumeAbortRef === resumeController) resumeAbortRef = null;
+        }
       },
 
       runEvaluation: async (prompt) => {
@@ -195,6 +404,8 @@ export const useArenaStore = create<ArenaState>()(
           return;
         }
 
+        resumeAbortRef?.abort();
+        resumeAbortRef = null;
         abortRef?.abort();
         abortRef = new AbortController();
         const signal = abortRef.signal;
@@ -211,20 +422,28 @@ export const useArenaStore = create<ArenaState>()(
         });
 
         try {
-          await executeEvaluation(settings, prompt, (session) => {
-            set({ lastRun: session });
-          }, signal);
+          await executeEvaluation(
+            settings,
+            prompt,
+            (session) => {
+              set({ lastRun: mergeSessionIfAborted(session, signal) });
+            },
+            signal,
+            () => get().lastRun,
+          );
         } catch (e) {
           if (e instanceof DOMException && e.name === "AbortError") {
-            set((st) => ({
-              lastRun: st.lastRun
-                ? {
-                    ...st.lastRun,
-                    phase: "done",
-                    error: "已取消",
-                  }
-                : null,
-            }));
+            set((st) => {
+              const cur = st.lastRun;
+              if (!cur) return { lastRun: null };
+              return {
+                lastRun: {
+                  ...cur,
+                  phase: "done",
+                  error: "已取消",
+                },
+              };
+            });
             return;
           }
           const msg = userFacingEvaluationError(e);
@@ -251,7 +470,7 @@ export const useArenaStore = create<ArenaState>()(
     }),
     {
       name: "llm-arena",
-      version: 10,
+      version: 13,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted, fromVersion) => {
         const p = persisted as {
@@ -450,6 +669,14 @@ export const useArenaStore = create<ArenaState>()(
           }
           p.settings = next;
         }
+        if (fromVersion < 12) {
+          const st = persisted as Record<string, unknown>;
+          if (!Array.isArray(st.scoreHistory)) st.scoreHistory = [];
+        }
+        if (fromVersion < 13) {
+          const st = persisted as Record<string, unknown>;
+          delete st.scoreHistory;
+        }
         return persisted as typeof persisted;
       },
       partialize: (state) => ({
@@ -471,6 +698,7 @@ export const useArenaStore = create<ArenaState>()(
             customEvaluationPresets: [],
           };
         }
+        delete (merged as Record<string, unknown>).scoreHistory;
         return merged as typeof currentState;
       },
     },
