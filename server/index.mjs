@@ -1,7 +1,7 @@
 import cors from "cors";
 import express from "express";
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 9400;
 const app = express();
 
 app.use(cors({ origin: true }));
