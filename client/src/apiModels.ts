@@ -53,6 +53,22 @@ function extractModelIds(json: unknown): string[] {
   return [...new Set(ids)].filter(Boolean);
 }
 
+function combineAbortSignals(
+  a: AbortSignal | undefined,
+  b: AbortSignal,
+): AbortSignal {
+  if (!a) return b;
+  const controller = new AbortController();
+  const forward = () => controller.abort();
+  if (a.aborted || b.aborted) {
+    forward();
+    return controller.signal;
+  }
+  a.addEventListener("abort", forward, { once: true });
+  b.addEventListener("abort", forward, { once: true });
+  return controller.signal;
+}
+
 /** 经本地代理拉取模型 ID */
 export async function fetchModelsList(
   baseUrl: string,
@@ -65,50 +81,59 @@ export async function fetchModelsList(
     ...(apiKey.trim() ? { Authorization: `Bearer ${apiKey}` } : {}),
   };
 
+  const timeoutMs = 45_000;
+  const timeoutController = new AbortController();
+  const timeoutId = window.setTimeout(() => timeoutController.abort(), timeoutMs);
+  const combined = combineAbortSignals(signal, timeoutController.signal);
+
   const tryPaths = [MODEL_PROXY_PATH, "/api/proxy/models"];
 
-  for (let i = 0; i < tryPaths.length; i++) {
-    const path = tryPaths[i];
-    const res = await fetch(path, { method: "GET", headers, signal });
-    const text = await res.text();
+  try {
+    for (let i = 0; i < tryPaths.length; i++) {
+      const path = tryPaths[i];
+      const res = await fetch(path, { method: "GET", headers, signal: combined });
+      const text = await res.text();
 
-    const parsed = tryParseJson(text);
-    const fromApi = parsed !== undefined ? errorMessageFromBody(parsed) : undefined;
+      const parsed = tryParseJson(text);
+      const fromApi = parsed !== undefined ? errorMessageFromBody(parsed) : undefined;
 
-    /* 上游无列表：服务端返回 502 + JSON，或旧版返回 404 + JSON — 一律展示 error.message，不换本地路径 */
-    if (!res.ok && fromApi) {
-      throw new Error(fromApi);
+      /* 上游无列表：服务端返回 502 + JSON，或旧版返回 404 + JSON — 一律展示 error.message，不换本地路径 */
+      if (!res.ok && fromApi) {
+        throw new Error(fromApi);
+      }
+
+      /* 仅当明显是「本地 Express 未注册该路由」时再试备用路径 */
+      const looksLikeLocalRouteMissing =
+        res.status === 404 &&
+        (text.includes("Cannot GET") ||
+          text.includes("<!DOCTYPE") ||
+          text.includes("<html"));
+
+      if (looksLikeLocalRouteMissing && i < tryPaths.length - 1) {
+        continue;
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          text.slice(0, 800) || `HTTP ${res.status}（${path}）`,
+        );
+      }
+
+      if (!parsed) {
+        throw new Error(text.slice(0, 500) || "无法解析 JSON");
+      }
+
+      const ids = extractModelIds(parsed);
+      if (ids.length === 0) {
+        throw new Error(
+          "响应中未找到模型列表（支持 data / models / model_ids 数组）。",
+        );
+      }
+      return ids.sort((a, b) => a.localeCompare(b));
     }
 
-    /* 仅当明显是「本地 Express 未注册该路由」时再试备用路径 */
-    const looksLikeLocalRouteMissing =
-      res.status === 404 &&
-      (text.includes("Cannot GET") ||
-        text.includes("<!DOCTYPE") ||
-        text.includes("<html"));
-
-    if (looksLikeLocalRouteMissing && i < tryPaths.length - 1) {
-      continue;
-    }
-
-    if (!res.ok) {
-      throw new Error(
-        text.slice(0, 800) || `HTTP ${res.status}（${path}）`,
-      );
-    }
-
-    if (!parsed) {
-      throw new Error(text.slice(0, 500) || "无法解析 JSON");
-    }
-
-    const ids = extractModelIds(parsed);
-    if (ids.length === 0) {
-      throw new Error(
-        "响应中未找到模型列表（支持 data / models / model_ids 数组）。",
-      );
-    }
-    return ids.sort((a, b) => a.localeCompare(b));
+    throw new Error("拉取模型列表失败");
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  throw new Error("拉取模型列表失败");
 }
