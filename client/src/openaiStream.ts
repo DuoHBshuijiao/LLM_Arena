@@ -1,5 +1,12 @@
 import type { ChatCompletionCreateParams } from "./openaiTypes";
 import { normalizeProxyBaseUrl } from "./apiModels";
+import {
+  createInlineThinkingState,
+  flushInlineThinking,
+  parseInlineThinkingFull,
+  processInlineThinkingChunk,
+  stripCompleteRedactedThinking,
+} from "./inlineThinking";
 
 const PROXY_PATH = "/api/proxy/v1/chat/completions";
 
@@ -17,7 +24,65 @@ export interface StreamDelta {
 
 function deltaReasoningPiece(delta: Record<string, unknown>): string {
   const r = delta.reasoning_content ?? delta.reasoning ?? delta.thinking;
-  return typeof r === "string" ? r : "";
+  if (typeof r === "string") return r;
+  if (
+    r &&
+    typeof r === "object" &&
+    "text" in r &&
+    typeof (r as { text: unknown }).text === "string"
+  ) {
+    return (r as { text: string }).text;
+  }
+  return "";
+}
+
+/** OpenAI 兼容：content 可为 string 或 [{ type, text }] */
+function deltaStringContent(delta: Record<string, unknown>): string {
+  const c = delta.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  let out = "";
+  for (const part of c) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as Record<string, unknown>;
+    const t = typeof p.type === "string" ? p.type.toLowerCase() : "";
+    if (t === "reasoning" || t === "thinking") continue;
+    const text = typeof p.text === "string" ? p.text : "";
+    out += text;
+  }
+  return out;
+}
+
+function reasoningFromContentArray(delta: Record<string, unknown>): string {
+  const c = delta.content;
+  if (!Array.isArray(c)) return "";
+  let out = "";
+  for (const part of c) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as Record<string, unknown>;
+    const t = typeof p.type === "string" ? p.type.toLowerCase() : "";
+    if (t !== "reasoning" && t !== "thinking") continue;
+    const text = typeof p.text === "string" ? p.text : "";
+    out += text;
+  }
+  return out;
+}
+
+function emitDelta(
+  onDelta: (chunk: StreamDelta) => void,
+  fullContent: { v: string },
+  fullReasoning: { v: string },
+  content: string,
+  reasoning: string,
+): void {
+  if (content) {
+    fullContent.v += content;
+    onDelta({ content, reasoning: "" });
+  }
+  if (reasoning) {
+    fullReasoning.v += reasoning;
+    onDelta({ content: "", reasoning });
+  }
 }
 
 /** Accumulate assistant delta text + reasoning from OpenAI-compatible SSE. */
@@ -52,18 +117,20 @@ async function readSSEText(
   res: Response,
   onDelta: (chunk: StreamDelta) => void,
 ): Promise<StreamDelta> {
-  let fullContent = "";
-  let fullReasoning = "";
+  const fullContent = { v: "" };
+  const fullReasoning = { v: "" };
 
   if (!res.body) {
     const t = await res.text();
     if (!res.ok) throw new Error(t.slice(0, 2000) || `HTTP ${res.status}`);
-    return { content: t, reasoning: "" };
+    const parsed = parseInlineThinkingFull(t);
+    return { content: parsed.content, reasoning: parsed.reasoning };
   }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const inlineAcc = createInlineThinkingState();
 
   try {
     for (;;) {
@@ -87,17 +154,13 @@ async function readSSEText(
           const delta = json.choices?.[0]?.delta;
           if (!delta || typeof delta !== "object") continue;
           const d = delta as Record<string, unknown>;
-          const content =
-            typeof d.content === "string" ? d.content : "";
-          const reasoning = deltaReasoningPiece(d);
-          if (content) {
-            fullContent += content;
-            onDelta({ content, reasoning: "" });
-          }
-          if (reasoning) {
-            fullReasoning += reasoning;
-            onDelta({ content: "", reasoning });
-          }
+          const rawContent = deltaStringContent(d);
+          const split = processInlineThinkingChunk(rawContent, inlineAcc);
+          emitDelta(onDelta, fullContent, fullReasoning, split.content, split.reasoning);
+
+          const fromArray = reasoningFromContentArray(d);
+          const fromFields = deltaReasoningPiece(d);
+          emitDelta(onDelta, fullContent, fullReasoning, "", fromArray + fromFields);
         } catch {
           /* ignore partial JSON lines */
         }
@@ -107,10 +170,23 @@ async function readSSEText(
     reader.releaseLock();
   }
 
+  const tail = flushInlineThinking(inlineAcc);
+  emitDelta(onDelta, fullContent, fullReasoning, tail.content, tail.reasoning);
+
+  {
+    const s = stripCompleteRedactedThinking(fullContent.v);
+    fullContent.v = s.content;
+    if (s.reasoning) {
+      fullReasoning.v = fullReasoning.v
+        ? `${fullReasoning.v}\n${s.reasoning}`
+        : s.reasoning;
+    }
+  }
+
   if (!res.ok) {
     throw new Error(
-      (fullContent + fullReasoning).slice(0, 2000) || `HTTP ${res.status}`,
+      (fullContent.v + fullReasoning.v).slice(0, 2000) || `HTTP ${res.status}`,
     );
   }
-  return { content: fullContent, reasoning: fullReasoning };
+  return { content: fullContent.v, reasoning: fullReasoning.v };
 }

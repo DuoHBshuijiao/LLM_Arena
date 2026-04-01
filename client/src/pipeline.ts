@@ -1,4 +1,5 @@
 import pLimit from "p-limit";
+import { stripCompleteRedactedThinking } from "./inlineThinking";
 import { streamChat } from "./openaiStream";
 import { getPreset } from "./settingsHelpers";
 import type {
@@ -7,6 +8,33 @@ import type {
   JudgeRunResult,
   RunSession,
 } from "./types";
+
+/** 将同一帧内多次流式 onUpdate 合并为一次，减轻多线程卡片时的 React 重绘压力 */
+function createSessionUpdateBatcher(onUpdate: (s: RunSession) => void) {
+  let pending: RunSession | null = null;
+  let raf = 0;
+  return {
+    schedule(s: RunSession) {
+      pending = s;
+      if (!raf) {
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          const p = pending;
+          pending = null;
+          if (p) onUpdate(p);
+        });
+      }
+    },
+    flush(s: RunSession) {
+      pending = null;
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+      onUpdate(s);
+    },
+  };
+}
 
 function presetOrThrow(settings: GlobalSettings, presetId: string) {
   const p = getPreset(settings, presetId);
@@ -96,6 +124,14 @@ function rebuildJudgeRunsFromScratch(
   return out;
 }
 
+function appendStrippedReasoning(
+  existing: string,
+  strippedReasoning: string,
+): string {
+  if (!strippedReasoning) return existing;
+  return existing ? `${existing}\n${strippedReasoning}` : strippedReasoning;
+}
+
 export async function executeEvaluation(
   settings: GlobalSettings,
   prompt: string,
@@ -135,7 +171,8 @@ export async function executeEvaluation(
   const limiters = buildPresetLimiters(settings);
   const judgeScratch = new Map<string, { raw: string; reasoning: string }>();
 
-  onUpdate({ ...base, generations: [...gens] });
+  const batch = createSessionUpdateBatcher(onUpdate);
+  batch.flush({ ...base, generations: [...gens] });
 
   const runThread = async (i: number) => {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -163,11 +200,17 @@ export async function executeEvaluation(
             reasoningText: reasoningText || undefined,
             threadPhase: "generating",
           };
-          onUpdate({ ...base, phase: "running", generations: [...gens] });
+          batch.schedule({ ...base, phase: "running", generations: [...gens] });
         },
         signal,
       );
     });
+
+    {
+      const s = stripCompleteRedactedThinking(text);
+      text = s.content;
+      reasoningText = appendStrippedReasoning(reasoningText, s.reasoning);
+    }
 
     gens[i] = {
       ...gens[i],
@@ -175,7 +218,7 @@ export async function executeEvaluation(
       reasoningText: reasoningText || undefined,
       threadPhase: "judging",
     };
-    onUpdate({ ...base, phase: "running", generations: [...gens] });
+    batch.flush({ ...base, phase: "running", generations: [...gens] });
 
     const judgePromises: Promise<void>[] = [];
     for (const judge of settings.judges) {
@@ -218,10 +261,19 @@ export async function executeEvaluation(
                     settings,
                   ),
                 };
-                onUpdate({ ...base, phase: "running", generations: [...gens] });
+                batch.schedule({
+                  ...base,
+                  phase: "running",
+                  generations: [...gens],
+                });
               },
               signal,
             );
+            {
+              const s = stripCompleteRedactedThinking(jr);
+              jr = s.content;
+              jrReason = appendStrippedReasoning(jrReason, s.reasoning);
+            }
             const slot = judgeScratch.get(sk)!;
             slot.raw = jr;
             slot.reasoning = jrReason;
@@ -233,7 +285,7 @@ export async function executeEvaluation(
                 settings,
               ),
             };
-            onUpdate({ ...base, phase: "running", generations: [...gens] });
+            batch.flush({ ...base, phase: "running", generations: [...gens] });
           }),
         );
       }
@@ -242,12 +294,12 @@ export async function executeEvaluation(
 
     if (!settings.aggregator.enabled) {
       gens[i] = { ...gens[i], threadPhase: "done" };
-      onUpdate({ ...base, phase: "running", generations: [...gens] });
+      batch.flush({ ...base, phase: "running", generations: [...gens] });
       return;
     }
 
     gens[i] = { ...gens[i], threadPhase: "aggregating" };
-    onUpdate({ ...base, phase: "running", generations: [...gens] });
+    batch.flush({ ...base, phase: "running", generations: [...gens] });
 
     const g = gens[i];
     const reviewsText = g.judgeRuns
@@ -284,11 +336,17 @@ export async function executeEvaluation(
             aggregateText: agg,
             aggregateReasoningText: aggReason || undefined,
           };
-          onUpdate({ ...base, phase: "running", generations: [...gens] });
+          batch.schedule({ ...base, phase: "running", generations: [...gens] });
         },
         signal,
       );
     });
+
+    {
+      const s = stripCompleteRedactedThinking(agg);
+      agg = s.content;
+      aggReason = appendStrippedReasoning(aggReason, s.reasoning);
+    }
 
     gens[i] = {
       ...gens[i],
@@ -296,14 +354,14 @@ export async function executeEvaluation(
       aggregateReasoningText: aggReason || undefined,
       threadPhase: "done",
     };
-    onUpdate({ ...base, phase: "running", generations: [...gens] });
+    batch.flush({ ...base, phase: "running", generations: [...gens] });
   };
 
   await Promise.all(tasks.map((_, i) => runThread(i)));
 
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 
-  onUpdate({
+  batch.flush({
     ...base,
     phase: "done",
     generations: [...gens],
