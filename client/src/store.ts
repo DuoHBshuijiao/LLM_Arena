@@ -12,6 +12,7 @@ import { executeEvaluation } from "./pipeline";
 import { DEFAULT_BLEND_WEIGHTS, normalizeBlendWeights } from "./scoreCalculations";
 import type {
   BlendWeights,
+  CustomEvaluationPresetEntry,
   GenerationResult,
   GlobalSettings,
   RunSession,
@@ -69,6 +70,7 @@ function createDefaultSettings(): GlobalSettings {
     },
     taskPrompt: "",
     evaluationPresetId: DEFAULT_EVALUATION_PRESET_ID,
+    customEvaluationPresets: [],
   };
   const withJudges = applyPoetryJudgePrompts(base);
   return applyEvaluationPreset(withJudges, DEFAULT_EVALUATION_PRESET_ID);
@@ -249,7 +251,7 @@ export const useArenaStore = create<ArenaState>()(
     }),
     {
       name: "llm-arena",
-      version: 9,
+      version: 10,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted, fromVersion) => {
         const p = persisted as {
@@ -418,6 +420,36 @@ export const useArenaStore = create<ArenaState>()(
             lr.phase = "done";
           }
         }
+        if (fromVersion < 10 && p.settings) {
+          const s = p.settings as GlobalSettings;
+          const raw = (s as { customEvaluationPresets?: unknown })
+            .customEvaluationPresets;
+          const customEvaluationPresets: CustomEvaluationPresetEntry[] =
+            Array.isArray(raw)
+              ? (raw as CustomEvaluationPresetEntry[]).map((x) => ({
+                  id:
+                    typeof x.id === "string" && x.id.trim()
+                      ? x.id
+                      : crypto.randomUUID(),
+                  name:
+                    typeof x.name === "string" && x.name.trim()
+                      ? x.name
+                      : "自定义题目",
+                  taskPrompt:
+                    typeof x.taskPrompt === "string" ? x.taskPrompt : "",
+                }))
+              : [];
+          let next: GlobalSettings = { ...s, customEvaluationPresets };
+          if (
+            !getEvaluationPresetById(
+              next.evaluationPresetId,
+              customEvaluationPresets,
+            )
+          ) {
+            next = applyEvaluationPreset(next, DEFAULT_EVALUATION_PRESET_ID);
+          }
+          p.settings = next;
+        }
         return persisted as typeof persisted;
       },
       partialize: (state) => ({
@@ -427,6 +459,20 @@ export const useArenaStore = create<ArenaState>()(
         threadScores: state.threadScores,
         blendWeights: state.blendWeights,
       }),
+      merge: (persistedState, currentState) => {
+        const merged = {
+          ...currentState,
+          ...(persistedState as Record<string, unknown>),
+        };
+        const s = merged.settings as GlobalSettings | undefined;
+        if (s && s.customEvaluationPresets === undefined) {
+          merged.settings = {
+            ...s,
+            customEvaluationPresets: [],
+          };
+        }
+        return merged as typeof currentState;
+      },
     },
   ),
 );
