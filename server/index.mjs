@@ -1,5 +1,12 @@
 import cors from "cors";
 import express from "express";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** 仓库根目录下的 data/scores（与 server 目录同级） */
+const SCORES_DIR = path.resolve(__dirname, "..", "data", "scores");
 
 const PORT = Number(process.env.PORT) || 9400;
 const app = express();
@@ -37,6 +44,15 @@ app.post("/proxy/v1/chat/completions", async (req, res) => {
     return;
   }
 
+  /**
+   * 须在「上游 fetch 已返回」后再监听客户端断开。
+   * 若在 await fetch(上游) 之前就 req.on('close')，某些环境（Vite 反代、连接复用等）
+   * 会在仍等待上游首包时误触发 close，导致 AbortSignal 取消 fetch，报
+   * "This operation was aborted"；而 GET /models 很快结束不易复现。
+   */
+  const upstreamAbort = new AbortController();
+  const onClientGone = () => upstreamAbort.abort();
+
   const authorization = req.headers.authorization;
   const payload = { ...req.body, stream: true };
   const headers = {
@@ -54,9 +70,11 @@ app.post("/proxy/v1/chat/completions", async (req, res) => {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
+        signal: upstreamAbort.signal,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.error("[proxy] upstream fetch failed:", url, msg);
       res.status(502).json({ error: "Upstream fetch failed", detail: msg });
       return;
     }
@@ -78,6 +96,9 @@ app.post("/proxy/v1/chat/completions", async (req, res) => {
     return;
   }
 
+  req.on("close", onClientGone);
+  req.on("aborted", onClientGone);
+
   const ct = upstream.headers.get("content-type");
   if (ct) res.setHeader("Content-Type", ct);
   res.status(upstream.status);
@@ -85,12 +106,16 @@ app.post("/proxy/v1/chat/completions", async (req, res) => {
   if (!upstream.body) {
     const text = await upstream.text();
     res.send(text);
+    req.off("close", onClientGone);
+    req.off("aborted", onClientGone);
     return;
   }
 
   if (!upstream.ok) {
     const text = await upstream.text();
     res.send(text);
+    req.off("close", onClientGone);
+    req.off("aborted", onClientGone);
     return;
   }
 
@@ -104,8 +129,12 @@ app.post("/proxy/v1/chat/completions", async (req, res) => {
   } catch {
     if (!res.headersSent) res.status(502);
     res.end();
+    req.off("close", onClientGone);
+    req.off("aborted", onClientGone);
     return;
   }
+  req.off("close", onClientGone);
+  req.off("aborted", onClientGone);
   res.end();
 });
 
@@ -173,6 +202,64 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+/** 成绩快照：写入 data/scores/{id}.json */
+app.post("/scores", async (req, res) => {
+  try {
+    const snapshot = req.body;
+    if (
+      !snapshot ||
+      typeof snapshot !== "object" ||
+      typeof snapshot.id !== "string" ||
+      !snapshot.id.trim()
+    ) {
+      res.status(400).json({ error: "Invalid snapshot: missing id" });
+      return;
+    }
+    await fs.mkdir(SCORES_DIR, { recursive: true });
+    const safeName = `${snapshot.id.replace(/[^a-zA-Z0-9._-]/g, "_")}.json`;
+    const filePath = path.join(SCORES_DIR, safeName);
+    await fs.writeFile(
+      filePath,
+      `${JSON.stringify(snapshot, null, 2)}\n`,
+      "utf8",
+    );
+    res.json({ ok: true, id: snapshot.id });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[scores] POST failed:", msg);
+    res.status(500).json({ error: msg });
+  }
+});
+
+app.get("/scores", async (_req, res) => {
+  try {
+    await fs.mkdir(SCORES_DIR, { recursive: true });
+    let names = [];
+    try {
+      names = await fs.readdir(SCORES_DIR);
+    } catch {
+      names = [];
+    }
+    const jsonFiles = names.filter((n) => n.endsWith(".json"));
+    const entries = [];
+    for (const name of jsonFiles) {
+      try {
+        const raw = await fs.readFile(path.join(SCORES_DIR, name), "utf8");
+        entries.push(JSON.parse(raw));
+      } catch (e) {
+        console.warn("[scores] skip invalid file:", name, e);
+      }
+    }
+    entries.sort((a, b) => (b?.savedAt ?? 0) - (a?.savedAt ?? 0));
+    res.json({ entries });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[scores] GET failed:", msg);
+    res.status(500).json({ error: msg });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[llm-arena] proxy http://localhost:${PORT}`);
+  console.log(`[llm-arena] score snapshots dir: ${SCORES_DIR}`);
 });
