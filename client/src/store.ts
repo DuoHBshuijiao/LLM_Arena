@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { userFacingEvaluationError } from "./errorUtils";
 import { executeEvaluation } from "./pipeline";
-import { DEFAULT_BLEND_WEIGHTS } from "./scoreCalculations";
+import { DEFAULT_BLEND_WEIGHTS, normalizeBlendWeights } from "./scoreCalculations";
 import type {
   BlendWeights,
   GenerationResult,
@@ -75,7 +76,7 @@ interface ArenaState {
   humanScores: Record<string, number>;
   /** 按 generation.id 存每线程填写的评委分与人类分 */
   threadScores: Record<string, ThreadScoreInput>;
-  /** 分数计算器：各参赛模型权重 + 人类分权重 */
+  /** 分数计算器：各评委权重 + 人类分权重 */
   blendWeights: BlendWeights;
   setSettings: (s: GlobalSettings) => void;
   updateHumanScore: (modelId: string, score: number | undefined) => void;
@@ -85,7 +86,7 @@ interface ArenaState {
     score: number | undefined,
   ) => void;
   setThreadHumanScore: (genId: string, score: number | undefined) => void;
-  setModelBlendWeight: (modelId: string, w: number) => void;
+  setJudgeBlendWeight: (judgeId: string, w: number) => void;
   setHumanBlendWeight: (w: number) => void;
   runEvaluation: (prompt: string) => Promise<void>;
   cancelRun: () => void;
@@ -133,16 +134,16 @@ export const useArenaStore = create<ArenaState>()(
           };
         }),
 
-      setModelBlendWeight: (modelId, w) =>
-        set((state) => ({
-          blendWeights: {
-            ...state.blendWeights,
-            modelWeights: {
-              ...state.blendWeights.modelWeights,
-              [modelId]: w,
+      setJudgeBlendWeight: (judgeId, w) =>
+        set((state) => {
+          const jw = state.blendWeights.judgeWeights ?? {};
+          return {
+            blendWeights: {
+              ...state.blendWeights,
+              judgeWeights: { ...jw, [judgeId]: w },
             },
-          },
-        })),
+          };
+        }),
 
       setHumanBlendWeight: (w) =>
         set((state) => ({
@@ -215,7 +216,7 @@ export const useArenaStore = create<ArenaState>()(
             }));
             return;
           }
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = userFacingEvaluationError(e);
           set((st) => ({
             lastRun: st.lastRun
               ? {
@@ -239,7 +240,7 @@ export const useArenaStore = create<ArenaState>()(
     }),
     {
       name: "llm-arena",
-      version: 5,
+      version: 7,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted, fromVersion) => {
         const p = persisted as {
@@ -306,6 +307,30 @@ export const useArenaStore = create<ArenaState>()(
           if (!st.blendWeights) {
             st.blendWeights = { ...DEFAULT_BLEND_WEIGHTS };
           }
+        }
+        if (fromVersion < 6) {
+          const st = persisted as Record<string, unknown>;
+          const rawBw = st.blendWeights;
+          if (
+            rawBw &&
+            typeof rawBw === "object" &&
+            !("judgeWeights" in rawBw)
+          ) {
+            const m = rawBw as Record<string, unknown>;
+            st.blendWeights = {
+              judgeWeights: {},
+              humanWeight:
+                typeof m.humanWeight === "number" && !Number.isNaN(m.humanWeight)
+                  ? m.humanWeight
+                  : 1,
+            };
+          }
+        }
+        if (fromVersion < 7) {
+          const st = persisted as Record<string, unknown>;
+          st.blendWeights = normalizeBlendWeights(
+            st.blendWeights as BlendWeights | undefined,
+          );
         }
         if (fromVersion < 5 && p.settings) {
           const oldGlobal =
