@@ -71,7 +71,14 @@ export function SettingsPanel({ settings, onChange }: Props) {
         const ids = await fetchModelsList(p.baseUrl, p.apiKey);
         setModelsByPreset((prev) => ({ ...prev, [presetId]: ids }));
       } catch (e) {
-        setFetchError(e instanceof Error ? e.message : String(e));
+        if (e instanceof DOMException && e.name === "AbortError") {
+          setFetchError("请求超时或已中断，请稍后重试。");
+        } else {
+          const raw = e instanceof Error ? e.message : String(e);
+          const msg =
+            raw.trim().length > 900 ? `${raw.trim().slice(0, 900)}…` : raw;
+          setFetchError(msg || "获取失败，请重试。");
+        }
       } finally {
         setFetchingPresetId(null);
       }
@@ -145,7 +152,11 @@ export function SettingsPanel({ settings, onChange }: Props) {
         / 汇总请求共享该上限。「获取模型列表」或「手动添加模型
         ID」会合并进该预设的可选列表，再在下方的参赛模型 / Judge / 汇总中选择。
       </p>
-      {fetchError && <p className="err fetch-err">{fetchError}</p>}
+      {fetchError && (
+        <p className="err fetch-err fetch-err--block" role="alert">
+          {fetchError}
+        </p>
+      )}
       {settings.apiPresets.map((preset, idx) => (
         <div key={preset.id} className="preset-card">
           <div className="row">
@@ -197,13 +208,13 @@ export function SettingsPanel({ settings, onChange }: Props) {
                     : "获取模型列表"}
                 </button>
                 <span className="muted small">
-                  拉取 {(modelsByPreset[preset.id] ?? []).length} · 手输{" "}
+                  已拉取 {(modelsByPreset[preset.id] ?? []).length} · 手动{" "}
                   {(preset.manualModelIds ?? []).length} · 合计可选{" "}
                   {(mergedModelsByPreset[preset.id] ?? []).length}
                 </span>
               </div>
             </div>
-            <div className="field" style={{ flex: "0 0 120px" }}>
+            <div className="field field--fixed-120">
               <label>并发上限</label>
               <input
                 type="number"
@@ -266,7 +277,7 @@ export function SettingsPanel({ settings, onChange }: Props) {
                   <button
                     type="button"
                     className="btn-tag-remove"
-                    title="从手输列表移除"
+                    title="从手动列表中移除"
                     onClick={() => removeManualModelId(idx, mid)}
                   >
                     ×
@@ -366,7 +377,7 @@ export function SettingsPanel({ settings, onChange }: Props) {
                 refreshPending={fetchingPresetId === m.presetId}
               />
             </div>
-            <div className="field" style={{ flex: "0 0 120px" }}>
+            <div className="field field--fixed-120">
               <label>重复次数 n</label>
               <input
                 type="number"
@@ -459,7 +470,7 @@ export function SettingsPanel({ settings, onChange }: Props) {
                 refreshPending={fetchingPresetId === j.presetId}
               />
             </div>
-            <div className="field" style={{ flex: "0 0 100px" }}>
+            <div className="field field--fixed-100">
               <label>review 次数</label>
               <input
                 type="number"
@@ -525,10 +536,11 @@ export function SettingsPanel({ settings, onChange }: Props) {
       </button>
 
       <h3 className="section-title">汇总模型</h3>
-      <div className="field">
-        <label>
+      <div className="field field--switch">
+        <label className="switch-field">
           <input
             type="checkbox"
+            className="switch-field__input"
             checked={settings.aggregator.enabled}
             onChange={(e) =>
               patch({
@@ -538,8 +550,9 @@ export function SettingsPanel({ settings, onChange }: Props) {
                 },
               })
             }
-          />{" "}
-          启用汇总（全链路流式）
+          />
+          <span className="switch-field__control" aria-hidden="true" />
+          <span className="switch-field__text">启用汇总（全链路流式）</span>
         </label>
       </div>
       <div className="aggregator-card">

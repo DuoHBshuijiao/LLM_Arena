@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { clampScore10 } from "../errorUtils";
 import type {
   GenerationResult,
   GlobalSettings,
@@ -13,32 +14,46 @@ import type {
   ThreadScoreInput,
 } from "../types";
 
+/** 灰粉 + 玫瑰金：线程与评委框色，低饱和区分、避免荧光粉 */
 const THREAD_FRAME = [
-  "#2563eb",
-  "#059669",
-  "#ca8a04",
-  "#9333ea",
-  "#db2777",
-  "#e11d48",
-  "#0891b2",
-  "#4f46e5",
+  "#9a8790",
+  "#a89096",
+  "#b89a8f",
+  "#b5a399",
+  "#c4a090",
+  "#ad8892",
+  "#a89888",
+  "#c9a8a0",
 ];
 
 const JUDGE_FRAME = [
-  "#ea580c",
-  "#06b6d4",
-  "#8b5cf6",
-  "#16a34a",
-  "#c026d3",
-  "#0d9488",
-  "#f59e0b",
-  "#6366f1",
+  "#b8957a",
+  "#a89096",
+  "#9a8790",
+  "#c4a090",
+  "#ad8892",
+  "#b89a8f",
+  "#c9a574",
+  "#8b7278",
 ];
 
-const SUMMARY_FRAME = "#be123c";
+const SUMMARY_FRAME = "#735560";
 
 const COLS = 4;
 const CARD_MIN_W = 248;
+
+const CANVAS_SCALE_MIN = 0.25;
+const CANVAS_SCALE_MAX = 2.5;
+
+function isCanvasBlankWheelTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest(".run-canvas-card")) return false;
+  if (target.closest(".thread-score-bar")) return false;
+  if (target.closest("button, a, input, textarea, select, summary")) {
+    return false;
+  }
+  return true;
+}
 
 function judgeSlotsFromSettings(settings: GlobalSettings) {
   const slots: { judgeId: string; judgeName: string; reviewIndex: number }[] =
@@ -64,9 +79,10 @@ function findJudgeRun(
 function FlowArrow({ color }: { color: string }) {
   const uid = useId().replace(/:/g, "");
   const mid = `flow-m-${uid}`;
+  const lineLen = 22;
   return (
     <div className="run-flow-arrow" aria-hidden>
-      <svg width="24" height="28" viewBox="0 0 24 28">
+      <svg width="24" height="28" viewBox="0 0 24 28" className="run-flow-arrow__svg">
         <defs>
           <marker
             id={mid}
@@ -76,16 +92,24 @@ function FlowArrow({ color }: { color: string }) {
             refY="4"
             orient="auto"
           >
-            <polygon points="0 0, 8 4, 0 8" fill={color} />
+            <polygon
+              className="run-flow-arrow__marker-shape"
+              points="0 0, 8 4, 0 8"
+              fill={color}
+            />
           </marker>
         </defs>
         <line
+          className="run-flow-arrow__line"
           x1="12"
           y1="0"
           x2="12"
           y2="22"
           stroke={color}
           strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={lineLen}
+          strokeDashoffset={lineLen}
           markerEnd={`url(#${mid})`}
         />
       </svg>
@@ -113,6 +137,7 @@ export function RunCanvas({
   setThreadHumanScore,
 }: RunCanvasProps) {
   const [pan, setPan] = useState({ x: 80, y: 48 });
+  const [scale, setScale] = useState(1);
   const [panning, setPanning] = useState(false);
   const drag = useRef<{
     active: boolean;
@@ -121,6 +146,9 @@ export function RunCanvas({
     px: number;
     py: number;
   } | null>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const panRef = useRef(pan);
+  const scaleRef = useRef(scale);
 
   const judgeSlots = useMemo(
     () => judgeSlotsFromSettings(settings),
@@ -130,7 +158,45 @@ export function RunCanvas({
   const sessionId = session?.id;
   useEffect(() => {
     setPan({ x: 80, y: 48 });
+    setScale(1);
   }, [sessionId]);
+
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+
+  useEffect(() => {
+    scaleRef.current = scale;
+  }, [scale]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (!isCanvasBlankWheelTarget(e.target)) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const vx = e.clientX - rect.left;
+      const vy = e.clientY - rect.top;
+      const p = panRef.current;
+      const s = scaleRef.current;
+      const delta = -e.deltaY;
+      const factor = Math.exp(delta * 0.001);
+      let nextScale = Math.min(
+        CANVAS_SCALE_MAX,
+        Math.max(CANVAS_SCALE_MIN, s * factor),
+      );
+      if (Math.abs(nextScale - s) < 1e-6) return;
+      const cx = (vx - p.x) / s;
+      const cy = (vy - p.y) / s;
+      setPan({ x: vx - cx * nextScale, y: vy - cy * nextScale });
+      setScale(nextScale);
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -199,10 +265,11 @@ export function RunCanvas({
     <div className="run-canvas">
       <div className="run-canvas-toolbar">
         <span className="muted run-canvas-hint">
-          在空白处按住拖动平移画布 · 线程一行最多 {COLS} 列
+          空白处拖动平移 · 空白处滚轮缩放 · 线程一行最多 {COLS} 列
         </span>
       </div>
       <div
+        ref={viewportRef}
         className={
           panning
             ? "run-canvas-viewport run-canvas-viewport--panning"
@@ -216,7 +283,8 @@ export function RunCanvas({
         <div
           className="run-canvas-surface"
           style={{
-            transform: `translate(${pan.x}px, ${pan.y}px)`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            transformOrigin: "0 0",
           }}
         >
           <div
@@ -306,10 +374,11 @@ function ThreadColumn({
 
   return (
     <div
-      className="thread-column"
+      className="thread-column thread-column--animate"
       style={
         {
           "--thread-frame": frame,
+          "--thread-stagger": threadIndex,
         } as React.CSSProperties
       }
     >
@@ -318,14 +387,14 @@ function ThreadColumn({
         <span className="thread-column__meta">样本 #{g.sampleIndex + 1}</span>
       </div>
       <div className="thread-column__flow">
+        {g.reasoningText ? (
+          <div className="run-canvas-card run-canvas-card--think run-canvas-card--think-gen run-canvas-card--pop">
+            <div className="run-canvas-card__head">思考</div>
+            <pre className="run-canvas-think-card__body">{g.reasoningText}</pre>
+          </div>
+        ) : null}
         <div className="run-canvas-card run-canvas-card--gen">
           <div className="run-canvas-card__head">参赛生成</div>
-          {g.reasoningText ? (
-            <div className="run-canvas-reasoning">
-              <div className="run-canvas-reasoning__label">思考</div>
-              <pre className="run-canvas-reasoning__body">{g.reasoningText}</pre>
-            </div>
-          ) : null}
           <pre className="run-canvas-card__body">
             {g.text ||
               (g.threadPhase === "generating" && running
@@ -335,7 +404,7 @@ function ThreadColumn({
         </div>
 
         {judgeSlots.length > 0 && genStreamingDone && (
-          <>
+          <div className="run-canvas-flow-block run-canvas-flow-block--judge">
             <FlowArrow color={frame} />
             <div className="judge-row">
               {judgeSlots.map((slot, ji) => {
@@ -344,40 +413,66 @@ function ThreadColumn({
                 return (
                   <div
                     key={`${slot.judgeId}-${slot.reviewIndex}`}
-                    className="run-canvas-card run-canvas-card--judge"
-                    style={
-                      {
-                        "--card-frame": jc,
-                      } as React.CSSProperties
-                    }
+                    className="judge-slot"
                   >
-                    <div className="run-canvas-card__head">
-                      Judge · {slot.judgeName}
-                      <span className="run-canvas-card__sub">
-                        第 {slot.reviewIndex + 1} 轮
-                      </span>
-                    </div>
                     {jr?.reasoningText ? (
-                      <div className="run-canvas-reasoning run-canvas-reasoning--sm">
-                        <div className="run-canvas-reasoning__label">思考</div>
-                        <pre className="run-canvas-reasoning__body">
+                      <div
+                        className="run-canvas-card run-canvas-card--think run-canvas-card--think-judge"
+                        style={
+                          {
+                            "--card-frame": jc,
+                          } as React.CSSProperties
+                        }
+                      >
+                        <div className="run-canvas-card__head">思考</div>
+                        <pre className="run-canvas-think-card__body run-canvas-think-card__body--sm">
                           {jr.reasoningText}
                         </pre>
                       </div>
                     ) : null}
-                    <pre className="run-canvas-card__body run-canvas-card__body--sm">
-                      {jr?.rawText ?? ""}
-                    </pre>
+                    <div
+                      className="run-canvas-card run-canvas-card--judge"
+                      style={
+                        {
+                          "--card-frame": jc,
+                        } as React.CSSProperties
+                      }
+                    >
+                      <div className="run-canvas-card__head">
+                        Judge · {slot.judgeName}
+                        <span className="run-canvas-card__sub">
+                          第 {slot.reviewIndex + 1} 轮
+                        </span>
+                      </div>
+                      <pre className="run-canvas-card__body run-canvas-card__body--sm">
+                        {jr?.rawText ?? ""}
+                      </pre>
+                    </div>
                   </div>
                 );
               })}
             </div>
-          </>
+          </div>
         )}
 
         {showSummaryCard && (
-          <>
+          <div className="run-canvas-flow-block run-canvas-flow-block--summary">
             <FlowArrow color={frame} />
+            {g.aggregateReasoningText ? (
+              <div
+                className="run-canvas-card run-canvas-card--think run-canvas-card--think-summary"
+                style={
+                  {
+                    "--card-frame": SUMMARY_FRAME,
+                  } as React.CSSProperties
+                }
+              >
+                <div className="run-canvas-card__head">思考</div>
+                <pre className="run-canvas-think-card__body">
+                  {g.aggregateReasoningText}
+                </pre>
+              </div>
+            ) : null}
             <div
               className="run-canvas-card run-canvas-card--summary"
               style={
@@ -387,24 +482,16 @@ function ThreadColumn({
               }
             >
               <div className="run-canvas-card__head">汇总</div>
-              {g.aggregateReasoningText ? (
-                <div className="run-canvas-reasoning">
-                  <div className="run-canvas-reasoning__label">思考</div>
-                  <pre className="run-canvas-reasoning__body">
-                    {g.aggregateReasoningText}
-                  </pre>
-                </div>
-              ) : null}
               <pre className="run-canvas-card__body">
                 {g.aggregateText || ""}
               </pre>
             </div>
-          </>
+          </div>
         )}
       </div>
 
       {showScoreBar && (
-        <div className="thread-score-bar">
+        <div className="thread-score-bar thread-score-bar--animate">
           <div className="thread-score-bar__title">人工填分（0–10）</div>
           <div className="thread-score-bar__inputs">
             {judges.map((j) => (
@@ -430,13 +517,15 @@ function ThreadColumn({
                       return;
                     }
                     const v = Number(raw);
-                    if (!Number.isNaN(v)) setThreadJudgeScore(g.id, j.id, v);
+                    if (!Number.isNaN(v)) {
+                      setThreadJudgeScore(g.id, j.id, clampScore10(v));
+                    }
                   }}
                 />
               </label>
             ))}
             <label className="thread-score-bar__field thread-score-bar__field--human">
-              <span className="thread-score-bar__label">人类</span>
+              <span className="thread-score-bar__label">人工</span>
               <input
                 type="number"
                 min={0}
@@ -455,8 +544,10 @@ function ThreadColumn({
                     setThreadHumanScore(g.id, undefined);
                     return;
                   }
-                  const v = Number(raw);
-                  if (!Number.isNaN(v)) setThreadHumanScore(g.id, v);
+                    const v = Number(raw);
+                    if (!Number.isNaN(v)) {
+                      setThreadHumanScore(g.id, clampScore10(v));
+                    }
                 }}
               />
             </label>

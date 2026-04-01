@@ -1,3 +1,4 @@
+import { clampScore10 } from "../errorUtils";
 import {
   Bar,
   BarChart,
@@ -59,34 +60,37 @@ export function ChartsPanel({
     <div className="panel">
       <h2>人工分与图表</h2>
       <p className="muted">
-        每个<strong>模型</strong>填写一条人工「生成分」；图表对比「运行页」中按计算器得到的线程综合分（多样本取平均）与人工分。
+        此处按<strong>模型</strong>填一条<strong>整体验收</strong>人工分（0–10），用于与下方「自动汇总」柱状图对比。
+      </p>
+      <p className="muted charts-panel__lede-follow">
+        线程内的<strong>评委分</strong>与<strong>人工分</strong>请在「运行与结果」页填写。图中「自动汇总」= 按评委权重与人工分权重混合后的综合分（同一模型多线程取平均）。
       </p>
 
       {!hasAny && (
-        <p className="muted">暂无生成结果；请先完成一次评测。</p>
+        <p className="muted">还没有可对比的生成结果。请先到「运行与结果」完成一次评测。</p>
       )}
 
       {hasAny && (
         <>
-          <div className="table-wrap" style={{ marginBottom: "1rem" }}>
+          <div className="table-wrap charts-panel__table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>模型</th>
-                  <th>人工生成分（0–10）</th>
+                  <th>整体验收人工分（0–10）</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.modelId}>
-                    <td>{r.modelId}</td>
+                    <td className="table-cell-id">{r.modelId}</td>
                     <td>
                       <input
                         type="number"
                         min={0}
                         max={10}
                         step={0.5}
-                        style={{ maxWidth: 120 }}
+                        className="charts-panel__human-input"
                         value={
                           r.human !== undefined && !Number.isNaN(r.human)
                             ? String(r.human)
@@ -100,7 +104,9 @@ export function ChartsPanel({
                             return;
                           }
                           const v = Number(raw);
-                          if (!Number.isNaN(v)) onHumanChange(r.modelId, v);
+                          if (!Number.isNaN(v)) {
+                            onHumanChange(r.modelId, clampScore10(v));
+                          }
                         }}
                       />
                     </td>
@@ -110,13 +116,13 @@ export function ChartsPanel({
             </table>
           </div>
 
-          <div style={{ width: "100%", height: 360 }}>
+          <div className="charts-panel__chart">
             <ResponsiveContainer>
               <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 48 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#d8dce6" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
                 <XAxis
                   dataKey="name"
-                  tick={{ fill: "#5c6578", fontSize: 11 }}
+                  tick={{ fill: "var(--color-muted)", fontSize: 12 }}
                   interval={0}
                   angle={-25}
                   textAnchor="end"
@@ -124,18 +130,18 @@ export function ChartsPanel({
                 />
                 <YAxis
                   domain={[0, 10]}
-                  tick={{ fill: "#5c6578", fontSize: 11 }}
+                  tick={{ fill: "var(--color-muted)", fontSize: 12 }}
                 />
                 <Tooltip
                   contentStyle={{
-                    background: "#fff",
-                    border: "1px solid #d8dce6",
-                    color: "#1a1d24",
+                    background: "var(--color-surface)",
+                    border: "1px solid var(--color-border)",
+                    color: "var(--color-text)",
                   }}
                 />
                 <Legend />
-                <Bar dataKey="自动汇总" fill="#5b8fd4" />
-                <Bar dataKey="人工分" fill="#6fd4a5" />
+                <Bar dataKey="自动汇总" fill="var(--color-chart-a)" />
+                <Bar dataKey="人工分" fill="var(--color-chart-b)" />
               </BarChart>
             </ResponsiveContainer>
           </div>
