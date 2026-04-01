@@ -1,11 +1,17 @@
-import type { GlobalSettings } from "./types";
+import {
+  SHARED_AGGREGATOR_SYSTEM,
+  SHARED_AGGREGATOR_USER,
+} from "./aggregatorSharedPrompts";
+import type {
+  CustomEvaluationPresetEntry,
+  GlobalSettings,
+} from "./types";
 import {
   ALGORITHM_JUDGE_SYSTEM,
   ALGORITHM_JUDGE_USER,
   EVAL_PRESET_ALGO_ANN_TRILLION,
   EVAL_PRESET_ALGO_DYNAMIC_GRAPH_OOD,
   EVAL_PRESET_ALGO_TOPO_CAUSAL,
-  getAlgorithmAggregatorPartial,
   TASK_ALGO_ANN,
   TASK_ALGO_DYNAMIC_GRAPH,
   TASK_ALGO_TOPO_CAUSAL,
@@ -14,7 +20,6 @@ import {
   EVAL_PRESET_MATH_GALOIS_M23,
   EVAL_PRESET_MATH_HYPERGRAPH,
   EVAL_PRESET_MATH_TENSOR,
-  getMathAggregatorPartial,
   MATH_JUDGE_SYSTEM,
   MATH_JUDGE_USER,
   TASK_MATH_GALOIS_M23,
@@ -24,12 +29,17 @@ import {
 import {
   EVAL_PRESET_LLM_SYS_GPU_SPARSE,
   EVAL_PRESET_LLM_SYS_KV_CLUSTER,
-  getLlmSystemsAggregatorPartial,
   LLM_SYSTEMS_JUDGE_SYSTEM,
   LLM_SYSTEMS_JUDGE_USER,
   TASK_LLM_SYS_GPU_SPARSE,
   TASK_LLM_SYS_KV_CLUSTER,
 } from "./llmSystemsEvaluationPrompts";
+import {
+  EVAL_PRESET_PROSE_DUSK_OF_GREAT_TANG,
+  PROSE_JUDGE_SYSTEM,
+  PROSE_JUDGE_USER,
+  TASK_PROSE_DUSK_OF_GREAT_TANG,
+} from "./proseEvaluationPrompts";
 
 export {
   getAlgorithmAggregatorPartial,
@@ -48,20 +58,9 @@ export const EVAL_PRESET_POETRY_NIGHT_HANSHAN = "poetry-night-hanshan";
 export const EVAL_PRESET_POETRY_GUANSHU = "poetry-guanshu";
 export const EVAL_PRESET_POETRY_CITY_ALGAE = "poetry-city-algae";
 
-export const POETRY_AGGREGATOR_SYSTEM = `你是一个结果汇总助手。你的任务是将多位Judge对同一首诗歌的评分与评语进行简洁归纳。
-要求：
-1. 只整理评委的原意和分数，不加入自己的任何评价、判断或补充。
-2. 按评委模型名称分别列出，不得使用“评委1”“评委2”等匿名指代。
-3. 总字数不超过200字。
-4. 输出语言为中文。`;
+export const POETRY_AGGREGATOR_SYSTEM = SHARED_AGGREGATOR_SYSTEM;
 
-export const POETRY_AGGREGATOR_USER = `【参赛作品】
-{{candidate}}
-
-【各评委评价】
-{{reviews}}
-
-请按上述要求，汇总每位评委的意见与分数，只呈现评委模型原名及对应内容，不做额外评价。`;
+export const POETRY_AGGREGATOR_USER = SHARED_AGGREGATOR_USER;
 
 export const POETRY_JUDGE_SYSTEM = `你是一位在中文系执教30年的教授，专攻古典诗词与现当代文学。他厌恶“AI腔”（即辞藻华丽但言之无物、逻辑断裂的文本）。他打分极其吝啬，6分在他眼中意味着“勉强算诗”。
 
@@ -166,7 +165,9 @@ export type EvaluationPresetFamily =
   | "poetry"
   | "algorithm"
   | "math"
-  | "llm_systems";
+  | "llm_systems"
+  | "themed_prose"
+  | "custom";
 
 export interface EvaluationPresetDefinition {
   id: string;
@@ -254,61 +255,118 @@ export const BUILTIN_EVALUATION_PRESETS: EvaluationPresetDefinition[] = [
     taskPrompt: TASK_LLM_SYS_KV_CLUSTER,
     family: "llm_systems",
   },
+  {
+    id: EVAL_PRESET_PROSE_DUSK_OF_GREAT_TANG,
+    name: "命题作文 · 大唐黄昏",
+    description: "叙事与人物关系（古风长篇）",
+    taskPrompt: TASK_PROSE_DUSK_OF_GREAT_TANG,
+    family: "themed_prose",
+  },
 ];
 
 export const DEFAULT_EVALUATION_PRESET_ID = BUILTIN_EVALUATION_PRESETS[0].id;
 
+/** 旧版 localStorage 可能缺少该字段 */
+export function customEvaluationPresetsSafe(
+  s: GlobalSettings,
+): CustomEvaluationPresetEntry[] {
+  return s.customEvaluationPresets ?? [];
+}
+
+export function isBuiltinEvaluationPresetId(id: string): boolean {
+  return BUILTIN_EVALUATION_PRESETS.some((p) => p.id === id);
+}
+
 export function getEvaluationPresetById(
   id: string,
+  custom?: CustomEvaluationPresetEntry[],
 ): EvaluationPresetDefinition | undefined {
-  return BUILTIN_EVALUATION_PRESETS.find((p) => p.id === id);
+  const builtin = BUILTIN_EVALUATION_PRESETS.find((p) => p.id === id);
+  if (builtin) return builtin;
+  const c = custom?.find((x) => x.id === id);
+  if (!c) return undefined;
+  return {
+    id: c.id,
+    name: c.name,
+    taskPrompt: c.taskPrompt,
+    family: "custom",
+  };
+}
+
+/** 设置页 / 运行页下拉：内置 + 自定义 */
+export function getEvaluationPresetSelectOptions(
+  custom: CustomEvaluationPresetEntry[] | undefined,
+  labelStyle: "paren" | "emdash" = "paren",
+): { value: string; label: string }[] {
+  const list = custom ?? [];
+  const builtin = BUILTIN_EVALUATION_PRESETS.map((p) => ({
+    value: p.id,
+    label:
+      labelStyle === "emdash"
+        ? `${p.name}${p.description ? ` — ${p.description}` : ""}`
+        : `${p.name}${p.description ? `（${p.description}）` : ""}`,
+  }));
+  const customOpts = list.map((c) => ({
+    value: c.id,
+    label:
+      labelStyle === "emdash"
+        ? `${c.name} — 自定义`
+        : `${c.name}（自定义）`,
+  }));
+  return [...builtin, ...customOpts];
 }
 
 /** 用于设置页 / 运行页标题：随当前命题家族切换 */
-export function getEvaluationThemeLabel(presetId: string): string {
-  const def = getEvaluationPresetById(presetId);
+export function getEvaluationThemeLabel(
+  presetId: string,
+  custom?: CustomEvaluationPresetEntry[],
+): string {
+  const def = getEvaluationPresetById(presetId, custom);
   if (!def) return "诗歌评测";
+  if (def.family === "custom") return "自定义";
   if (def.family === "algorithm") return "算法设计";
   if (def.family === "math") return "数学评测";
   if (def.family === "llm_systems") return "硬件优化";
+  if (def.family === "themed_prose") return "命题作文";
   return "诗歌评测";
 }
 
 /**
- * 切换内置命题预设：更新题目、各 Judge 的 system/user，并按家族同步汇总模板。
+ * 切换命题预设：更新题目；内置题同步各 Judge 的家族默认模板；自定义题清空评委模板。
+ * 汇总模型的 system/user 始终保留当前已填内容，不随预设切换覆盖。
  */
 export function applyEvaluationPreset(
   settings: GlobalSettings,
   presetId: string,
 ): GlobalSettings {
-  const def = getEvaluationPresetById(presetId);
+  const customList = customEvaluationPresetsSafe(settings);
+  const def = getEvaluationPresetById(presetId, customList);
   if (!def) {
-    return settings;
+    return { ...settings, customEvaluationPresets: customList };
   }
-  const judgeSystem =
-    def.family === "algorithm"
+  const isCustom = def.family === "custom";
+  const judgeSystem = isCustom
+    ? ""
+    : def.family === "algorithm"
       ? ALGORITHM_JUDGE_SYSTEM
       : def.family === "math"
         ? MATH_JUDGE_SYSTEM
         : def.family === "llm_systems"
           ? LLM_SYSTEMS_JUDGE_SYSTEM
-          : POETRY_JUDGE_SYSTEM;
-  const judgeUser =
-    def.family === "algorithm"
+          : def.family === "themed_prose"
+            ? PROSE_JUDGE_SYSTEM
+            : POETRY_JUDGE_SYSTEM;
+  const judgeUser = isCustom
+    ? ""
+    : def.family === "algorithm"
       ? ALGORITHM_JUDGE_USER
       : def.family === "math"
         ? MATH_JUDGE_USER
         : def.family === "llm_systems"
           ? LLM_SYSTEMS_JUDGE_USER
-          : POETRY_JUDGE_USER;
-  const aggPartial =
-    def.family === "algorithm"
-      ? getAlgorithmAggregatorPartial()
-      : def.family === "math"
-        ? getMathAggregatorPartial()
-        : def.family === "llm_systems"
-          ? getLlmSystemsAggregatorPartial()
-          : getPoetryAggregatorPartial();
+          : def.family === "themed_prose"
+            ? PROSE_JUDGE_USER
+            : POETRY_JUDGE_USER;
   const judges = settings.judges.map((j) => ({
     ...j,
     systemPrompt: judgeSystem,
@@ -316,14 +374,84 @@ export function applyEvaluationPreset(
   }));
   return {
     ...settings,
+    customEvaluationPresets: customList,
     evaluationPresetId: def.id,
     taskPrompt: def.taskPrompt,
     judges,
-    aggregator: {
-      ...settings.aggregator,
-      ...aggPartial,
-    },
+    aggregator: settings.aggregator,
   };
+}
+
+/** 运行页编辑题目时：若当前为自定义预设，同步写回对应条目 */
+export function patchTaskPromptWithCustomStore(
+  settings: GlobalSettings,
+  taskPrompt: string,
+): GlobalSettings {
+  const id = settings.evaluationPresetId;
+  const customList = customEvaluationPresetsSafe(settings);
+  if (isBuiltinEvaluationPresetId(id)) {
+    return { ...settings, taskPrompt, customEvaluationPresets: customList };
+  }
+  const idx = customList.findIndex((c) => c.id === id);
+  if (idx < 0) return { ...settings, taskPrompt, customEvaluationPresets: customList };
+  const next = [...customList];
+  next[idx] = { ...next[idx], taskPrompt };
+  return { ...settings, taskPrompt, customEvaluationPresets: next };
+}
+
+export function updateCustomEvaluationPresetName(
+  settings: GlobalSettings,
+  id: string,
+  name: string,
+): GlobalSettings {
+  const customList = customEvaluationPresetsSafe(settings);
+  const idx = customList.findIndex((c) => c.id === id);
+  if (idx < 0) return { ...settings, customEvaluationPresets: customList };
+  const next = [...customList];
+  next[idx] = { ...next[idx], name };
+  return { ...settings, customEvaluationPresets: next };
+}
+
+/** 重命名自定义题目后调用：若正在使用该题，清空各评委已填模板（汇总不变） */
+export function clearJudgePromptsForCurrentPresetIf(
+  settings: GlobalSettings,
+  presetId: string,
+): GlobalSettings {
+  if (settings.evaluationPresetId !== presetId) return settings;
+  return {
+    ...settings,
+    judges: settings.judges.map((j) => ({
+      ...j,
+      systemPrompt: "",
+      userPromptTemplate: "",
+    })),
+  };
+}
+
+export function addCustomEvaluationPreset(settings: GlobalSettings): GlobalSettings {
+  const id = crypto.randomUUID();
+  const customList = customEvaluationPresetsSafe(settings);
+  const n = customList.length + 1;
+  const nextCustom: CustomEvaluationPresetEntry[] = [
+    ...customList,
+    { id, name: `自定义题目 ${n}`, taskPrompt: "" },
+  ];
+  return applyEvaluationPreset(
+    { ...settings, customEvaluationPresets: nextCustom },
+    id,
+  );
+}
+
+export function deleteCustomEvaluationPreset(
+  settings: GlobalSettings,
+  id: string,
+): GlobalSettings {
+  const rest = customEvaluationPresetsSafe(settings).filter((c) => c.id !== id);
+  let next: GlobalSettings = { ...settings, customEvaluationPresets: rest };
+  if (settings.evaluationPresetId === id) {
+    next = applyEvaluationPreset(next, DEFAULT_EVALUATION_PRESET_ID);
+  }
+  return next;
 }
 
 /** 迁移或补全：将 Judge 文案统一为诗歌教授模板（不修改 aggregator）。 */
