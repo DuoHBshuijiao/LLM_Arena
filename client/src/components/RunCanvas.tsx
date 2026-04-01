@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
@@ -45,13 +46,17 @@ const CARD_MIN_W = 248;
 const CANVAS_SCALE_MIN = 0.25;
 const CANVAS_SCALE_MAX = 2.5;
 
-function isCanvasBlankWheelTarget(target: EventTarget | null): boolean {
+/** 滚轮缩放画布：空白处直接缩放；卡片/流式区域上需 Ctrl/⌘+滚轮（避免抢走卡片内纵向滚动）。 */
+function isCanvasWheelZoomAllowed(e: WheelEvent, target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
-  if (target.closest(".run-canvas-card")) return false;
-  if (target.closest(".thread-score-bar")) return false;
   if (target.closest("button, a, input, textarea, select, summary")) {
     return false;
   }
+  if (e.ctrlKey || e.metaKey) {
+    return true;
+  }
+  if (target.closest(".run-canvas-card")) return false;
+  if (target.closest(".thread-score-bar")) return false;
   return true;
 }
 
@@ -174,7 +179,7 @@ export function RunCanvas({
     if (!el) return;
 
     const onWheel = (e: WheelEvent) => {
-      if (!isCanvasBlankWheelTarget(e.target)) return;
+      if (!isCanvasWheelZoomAllowed(e, e.target)) return;
       e.preventDefault();
       const rect = el.getBoundingClientRect();
       const vx = e.clientX - rect.left;
@@ -265,7 +270,8 @@ export function RunCanvas({
     <div className="run-canvas">
       <div className="run-canvas-toolbar">
         <span className="muted run-canvas-hint">
-          空白处拖动平移 · 空白处滚轮缩放 · 线程一行最多 {COLS} 列
+          空白处拖动平移 · 空白处滚轮缩放 · 卡片上 Ctrl/⌘+滚轮缩放 · 线程一行最多{" "}
+          {COLS} 列
         </span>
       </div>
       <div
@@ -322,17 +328,7 @@ function isWaitingAggregate(
   return g.threadPhase === "aggregating";
 }
 
-function ThreadColumn({
-  generation: g,
-  threadIndex,
-  session,
-  judgeSlots,
-  aggregatorEnabled,
-  judges,
-  threadScores,
-  setThreadJudgeScore,
-  setThreadHumanScore,
-}: {
+type ThreadColumnProps = {
   generation: GenerationResult;
   threadIndex: number;
   session: RunSession;
@@ -346,7 +342,36 @@ function ThreadColumn({
     score: number | undefined,
   ) => void;
   setThreadHumanScore: (genId: string, score: number | undefined) => void;
-}) {
+};
+
+function threadColumnPropsEqual(
+  prev: Readonly<ThreadColumnProps>,
+  next: Readonly<ThreadColumnProps>,
+): boolean {
+  if (prev.generation !== next.generation) return false;
+  if (prev.threadIndex !== next.threadIndex) return false;
+  if (prev.judgeSlots !== next.judgeSlots) return false;
+  if (prev.aggregatorEnabled !== next.aggregatorEnabled) return false;
+  if (prev.judges !== next.judges) return false;
+  if (prev.session.id !== next.session.id) return false;
+  if (prev.session.phase !== next.session.phase) return false;
+  if (prev.session.error !== next.session.error) return false;
+  const id = prev.generation.id;
+  if (prev.threadScores[id] !== next.threadScores[id]) return false;
+  return true;
+}
+
+function ThreadColumnInner({
+  generation: g,
+  threadIndex,
+  session,
+  judgeSlots,
+  aggregatorEnabled,
+  judges,
+  threadScores,
+  setThreadJudgeScore,
+  setThreadHumanScore,
+}: ThreadColumnProps) {
   const frame = THREAD_FRAME[threadIndex % THREAD_FRAME.length];
   const genStreamingDone = g.threadPhase !== "generating";
 
@@ -557,3 +582,5 @@ function ThreadColumn({
     </div>
   );
 }
+
+const ThreadColumn = memo(ThreadColumnInner, threadColumnPropsEqual);

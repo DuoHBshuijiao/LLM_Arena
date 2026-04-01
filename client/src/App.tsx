@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { applyEvaluationPreset } from "./evaluationPresets";
 import { useArenaStore } from "./store";
 
 const RunPanel = lazy(() =>
@@ -136,6 +137,20 @@ export default function App() {
               onRun={(p) => runEvaluation(p)}
               onCancel={cancelRun}
               onClearSession={clearLastRun}
+              onTaskPromptChange={(taskPrompt) =>
+                setSettings({
+                  ...useArenaStore.getState().settings,
+                  taskPrompt,
+                })
+              }
+              onEvaluationPresetChange={(presetId) =>
+                setSettings(
+                  applyEvaluationPreset(
+                    useArenaStore.getState().settings,
+                    presetId,
+                  ),
+                )
+              }
               running={running}
               phase={lastRun?.phase ?? "idle"}
             />

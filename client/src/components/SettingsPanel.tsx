@@ -1,7 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { fetchModelsList } from "../apiModels";
+import {
+  applyEvaluationPreset,
+  BUILTIN_EVALUATION_PRESETS,
+  POETRY_JUDGE_SYSTEM,
+  POETRY_JUDGE_USER,
+} from "../evaluationPresets";
 import type { ApiPreset, GlobalSettings, JudgeConfig, ModelEntry } from "../types";
-import { newId } from "../store";
+import { newId, useArenaStore } from "../store";
 import { ModelPresetPicker } from "./ModelPresetPicker";
 
 interface Props {
@@ -36,9 +42,6 @@ export function SettingsPanel({ settings, onChange }: Props) {
   const setModels = (models: ModelEntry[]) => patch({ models });
   const setJudges = (judges: JudgeConfig[]) => patch({ judges });
 
-  const [modelsByPreset, setModelsByPreset] = useState<
-    Record<string, string[]>
-  >({});
   const [fetchingPresetId, setFetchingPresetId] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   /** 各预设下「手动添加」输入框草稿 */
@@ -52,24 +55,36 @@ export function SettingsPanel({ settings, onChange }: Props) {
   const mergedModelsByPreset = useMemo(() => {
     const out: Record<string, string[]> = {};
     for (const p of settings.apiPresets) {
-      const fetched = modelsByPreset[p.id] ?? [];
+      const fetched = p.fetchedModelIds ?? [];
       const manual = p.manualModelIds ?? [];
       out[p.id] = [...new Set([...manual, ...fetched])].sort((a, b) =>
         a.localeCompare(b),
       );
     }
     return out;
-  }, [settings.apiPresets, modelsByPreset]);
+  }, [settings.apiPresets]);
+
+  const updatePreset = (idx: number, next: ApiPreset) => {
+    const list = [...settings.apiPresets];
+    list[idx] = next;
+    patch({ apiPresets: list });
+  };
 
   const fetchForPreset = useCallback(
     async (presetId: string) => {
-      const p = settings.apiPresets.find((x) => x.id === presetId);
-      if (!p) return;
+      const idx = settings.apiPresets.findIndex((x) => x.id === presetId);
+      const p = settings.apiPresets[idx];
+      if (!p || idx < 0) return;
       setFetchingPresetId(presetId);
       setFetchError(null);
       try {
         const ids = await fetchModelsList(p.baseUrl, p.apiKey);
-        setModelsByPreset((prev) => ({ ...prev, [presetId]: ids }));
+        const s = useArenaStore.getState().settings;
+        const i = s.apiPresets.findIndex((x) => x.id === presetId);
+        if (i < 0) return;
+        const list = [...s.apiPresets];
+        list[i] = { ...s.apiPresets[i], fetchedModelIds: ids };
+        onChange({ ...s, apiPresets: list });
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") {
           setFetchError("请求超时或已中断，请稍后重试。");
@@ -83,14 +98,8 @@ export function SettingsPanel({ settings, onChange }: Props) {
         setFetchingPresetId(null);
       }
     },
-    [settings.apiPresets],
+    [settings.apiPresets, onChange],
   );
-
-  const updatePreset = (idx: number, next: ApiPreset) => {
-    const list = [...settings.apiPresets];
-    list[idx] = next;
-    patch({ apiPresets: list });
-  };
 
   const addPreset = () => {
     patch({
@@ -102,6 +111,7 @@ export function SettingsPanel({ settings, onChange }: Props) {
           baseUrl: "https://api.openai.com",
           apiKey: "",
           manualModelIds: [],
+          fetchedModelIds: [],
           concurrency: 4,
         },
       ],
@@ -120,12 +130,16 @@ export function SettingsPanel({ settings, onChange }: Props) {
     setManualDraftByPreset((d) => ({ ...d, [preset.id]: "" }));
   };
 
-  const removeManualModelId = (presetIdx: number, modelId: string) => {
+  /** 从手动列表与拉取列表中同时移除（标签与下拉共用合并结果） */
+  const removePresetModelId = (presetIdx: number, modelId: string) => {
     const preset = settings.apiPresets[presetIdx];
     if (!preset) return;
     updatePreset(presetIdx, {
       ...preset,
       manualModelIds: (preset.manualModelIds ?? []).filter((x) => x !== modelId),
+      fetchedModelIds: (preset.fetchedModelIds ?? []).filter(
+        (x) => x !== modelId,
+      ),
     });
   };
 
@@ -145,6 +159,29 @@ export function SettingsPanel({ settings, onChange }: Props) {
       <p className="muted">
         配置与评测结果保存在本机浏览器 localStorage；清除站点数据会丢失。
       </p>
+
+      <h3 className="section-title">诗歌评测 · 预设题目</h3>
+      <p className="muted small">
+        与「运行与结果」页共用同一选项。切换后将更新题目与各评委的 system/user
+        模板；汇总模型的提示词不随命题切换（可在下方「汇总模型」中单独编辑）。
+      </p>
+      <div className="field">
+        <label htmlFor="eval-preset-select">预设题目</label>
+        <select
+          id="eval-preset-select"
+          value={settings.evaluationPresetId}
+          onChange={(e) =>
+            onChange(applyEvaluationPreset(settings, e.target.value))
+          }
+        >
+          {BUILTIN_EVALUATION_PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+              {p.description ? `（${p.description}）` : ""}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <h3 className="section-title">API 预设</h3>
       <p className="muted small">
@@ -208,7 +245,7 @@ export function SettingsPanel({ settings, onChange }: Props) {
                     : "获取模型列表"}
                 </button>
                 <span className="muted small">
-                  已拉取 {(modelsByPreset[preset.id] ?? []).length} · 手动{" "}
+                  已拉取 {(preset.fetchedModelIds ?? []).length} · 手动{" "}
                   {(preset.manualModelIds ?? []).length} · 合计可选{" "}
                   {(mergedModelsByPreset[preset.id] ?? []).length}
                 </span>
@@ -269,16 +306,16 @@ export function SettingsPanel({ settings, onChange }: Props) {
               </div>
             </div>
           </div>
-          {(preset.manualModelIds ?? []).length > 0 && (
+          {(mergedModelsByPreset[preset.id] ?? []).length > 0 && (
             <ul className="manual-model-tags">
-              {(preset.manualModelIds ?? []).map((mid) => (
+              {(mergedModelsByPreset[preset.id] ?? []).map((mid) => (
                 <li key={mid}>
                   <code>{mid}</code>
                   <button
                     type="button"
                     className="btn-tag-remove"
-                    title="从手动列表中移除"
-                    onClick={() => removeManualModelId(idx, mid)}
+                    title="从该预设可选列表中移除"
+                    onClick={() => removePresetModelId(idx, mid)}
                   >
                     ×
                   </button>
@@ -523,10 +560,8 @@ export function SettingsPanel({ settings, onChange }: Props) {
               name: "新评委",
               presetId: firstPresetId,
               model: "",
-              systemPrompt:
-                "你是向量检索与系统架构方向的评测专家。候选内容应针对「向量数据库 / ANN 近似最近邻」类算法与系统设计题。请从：问题边界是否清晰、索引与数据结构选型、插入/查询/更新的复杂度与量级、并行与分片、延迟与吞吐权衡、增量更新与可运维性等维度分析。先用自然语言分条写出分析，最后单独一行「综合分：X/10」（X 为 0–10）。",
-              userPromptTemplate:
-                "下面是对「向量数据库 / ANN 检索、性能优先」设计题的回答，请按 system 要求评价。\n\n【候选回答】\n{{candidate}}",
+              systemPrompt: POETRY_JUDGE_SYSTEM,
+              userPromptTemplate: POETRY_JUDGE_USER,
               reviewCount: 1,
             },
           ])

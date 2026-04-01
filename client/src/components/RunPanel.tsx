@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { uniqueModelIds } from "../chartUtils";
+import { BUILTIN_EVALUATION_PRESETS } from "../evaluationPresets";
 import { averageCompositeByModel, clampBlendWeight } from "../scoreCalculations";
 import { settingsReadyForRun } from "../settingsHelpers";
 import type { BlendWeights, GlobalSettings, RunSession, ThreadScoreInput } from "../types";
@@ -36,6 +37,8 @@ interface Props {
   onRun: (prompt: string) => void;
   onCancel: () => void;
   onClearSession: () => void;
+  onTaskPromptChange: (taskPrompt: string) => void;
+  onEvaluationPresetChange: (presetId: string) => void;
   running: boolean;
   phase: string;
 }
@@ -67,25 +70,11 @@ export function RunPanel({
   onRun,
   onCancel,
   onClearSession,
+  onTaskPromptChange,
+  onEvaluationPresetChange,
   running,
   phase,
 }: Props) {
-  const [prompt, setPrompt] = useState(
-    [
-      "你是一名后端/基础设施工程师。请完成下面这道与「向量数据库 / 近似最近邻（ANN）检索」相关的算法与系统设计题，要求性能优先、可落地。",
-      "",
-      "【题目】",
-      "为在线推荐场景设计一套向量检索组件：约 500 万条稠密向量（维度 768）、需支持 Top-K（K≤100）近似最近邻查询；峰值 QPS 较高，P99 查询延迟需尽量低；允许一定召回损失以换取速度。",
-      "",
-      "【请输出】",
-      "1）整体架构与关键数据结构（索引类型及选型理由，如 IVF、HNSW、PQ 等，说明取舍）",
-      "2）插入、查询、（可选）删除/更新的主流程与伪代码或关键步骤",
-      "3）时空复杂度或量级估计，以及为降延迟做的工程优化（批处理、并行、缓存、分片等）",
-      "4）增量更新与冷启动、故障降级各一条策略",
-      "",
-      "请用中文作答，避免空泛概念堆砌，给出可实现的方案。",
-    ].join("\n"),
-  );
   const est = useMemo(() => estimateCalls(settings), [settings]);
   const ready = useMemo(() => settingsReadyForRun(settings), [settings]);
 
@@ -122,11 +111,31 @@ export function RunPanel({
           </p>
         </div>
 
+        <div className="field run-page__preset-field">
+          <label htmlFor="run-eval-preset">预设题目（诗歌评测）</label>
+          <select
+            id="run-eval-preset"
+            value={settings.evaluationPresetId}
+            onChange={(e) => onEvaluationPresetChange(e.target.value)}
+            disabled={running}
+          >
+            {BUILTIN_EVALUATION_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.description ? ` — ${p.description}` : ""}
+              </option>
+            ))}
+          </select>
+          <p className="muted small run-page__preset-hint">
+            切换后将载入该题全文并同步评委提示词；可在下方继续微调题目。汇总模型提示词不随此处切换（见「设置」）。
+          </p>
+        </div>
+
         <div className="field">
-          <label>提示词</label>
+          <label>提示词（评测题目与要求）</label>
           <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            value={settings.taskPrompt}
+            onChange={(e) => onTaskPromptChange(e.target.value)}
             disabled={running}
           />
         </div>
@@ -136,7 +145,7 @@ export function RunPanel({
             type="button"
             className="btn-primary"
             disabled={running || !ready}
-            onClick={() => onRun(prompt)}
+            onClick={() => onRun(settings.taskPrompt)}
           >
             {running ? "进行中…" : "开始评测"}
           </button>
@@ -189,8 +198,7 @@ export function RunPanel({
             <p className="muted">
               同一条评测提示词按 API 预设的并发上限流式调用：各线程生成完成后立即进入
               Judge（多评委限流并行），再按需汇总。并发上限在「设置」的每个 API
-              预设中配置，同一预设下的参赛 / Judge / 汇总共享。默认题目为向量库/ANN
-              系统设计（性能优先）。评测结束后在线程下方填入人工分，并在「分数计算器」中查看按模型的最终得分（≤10）。与按模型的整体验收对比见「人工分与图表」标签页。
+              预设中配置，同一预设下的参赛 / Judge / 汇总共享。本主题为诗歌评测，可在上方切换三套预设题目。评测结束后在线程下方填入人工分，并在「分数计算器」中查看按模型的最终得分（≤10）。与按模型的整体验收对比见「人工分与图表」标签页。
             </p>
           </div>
         </details>
