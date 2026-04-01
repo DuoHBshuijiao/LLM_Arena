@@ -1,4 +1,47 @@
 import type { GlobalSettings } from "./types";
+import {
+  ALGORITHM_JUDGE_SYSTEM,
+  ALGORITHM_JUDGE_USER,
+  EVAL_PRESET_ALGO_ANN_TRILLION,
+  EVAL_PRESET_ALGO_DYNAMIC_GRAPH_OOD,
+  EVAL_PRESET_ALGO_TOPO_CAUSAL,
+  getAlgorithmAggregatorPartial,
+  TASK_ALGO_ANN,
+  TASK_ALGO_DYNAMIC_GRAPH,
+  TASK_ALGO_TOPO_CAUSAL,
+} from "./algorithmEvaluationPrompts";
+import {
+  EVAL_PRESET_MATH_GALOIS_M23,
+  EVAL_PRESET_MATH_HYPERGRAPH,
+  EVAL_PRESET_MATH_TENSOR,
+  getMathAggregatorPartial,
+  MATH_JUDGE_SYSTEM,
+  MATH_JUDGE_USER,
+  TASK_MATH_GALOIS_M23,
+  TASK_MATH_HYPERGRAPH,
+  TASK_MATH_TENSOR,
+} from "./mathEvaluationPrompts";
+import {
+  EVAL_PRESET_LLM_SYS_GPU_SPARSE,
+  EVAL_PRESET_LLM_SYS_KV_CLUSTER,
+  getLlmSystemsAggregatorPartial,
+  LLM_SYSTEMS_JUDGE_SYSTEM,
+  LLM_SYSTEMS_JUDGE_USER,
+  TASK_LLM_SYS_GPU_SPARSE,
+  TASK_LLM_SYS_KV_CLUSTER,
+} from "./llmSystemsEvaluationPrompts";
+
+export {
+  getAlgorithmAggregatorPartial,
+} from "./algorithmEvaluationPrompts";
+
+export {
+  getMathAggregatorPartial,
+} from "./mathEvaluationPrompts";
+
+export {
+  getLlmSystemsAggregatorPartial,
+} from "./llmSystemsEvaluationPrompts";
 
 /** 诗歌评测 — 三套命题 ID（稳定，勿改） */
 export const EVAL_PRESET_POETRY_NIGHT_HANSHAN = "poetry-night-hanshan";
@@ -119,11 +162,18 @@ const TASK_POETRY_3 = `题目： 《城市里的游藻》
 
 考察点： 考察模型的语言创新能力和打破常规逻辑的勇气。`;
 
+export type EvaluationPresetFamily =
+  | "poetry"
+  | "algorithm"
+  | "math"
+  | "llm_systems";
+
 export interface EvaluationPresetDefinition {
   id: string;
   name: string;
   description?: string;
   taskPrompt: string;
+  family: EvaluationPresetFamily;
 }
 
 export const BUILTIN_EVALUATION_PRESETS: EvaluationPresetDefinition[] = [
@@ -132,18 +182,77 @@ export const BUILTIN_EVALUATION_PRESETS: EvaluationPresetDefinition[] = [
     name: "命题一 · 夜访寒山",
     description: "意象重构（画面感与炼字）",
     taskPrompt: TASK_POETRY_1,
+    family: "poetry",
   },
   {
     id: EVAL_PRESET_POETRY_GUANSHU,
     name: "命题二 · 观书",
     description: "古典理趣（逻辑与哲思）",
     taskPrompt: TASK_POETRY_2,
+    family: "poetry",
   },
   {
     id: EVAL_PRESET_POETRY_CITY_ALGAE,
     name: "命题三 · 城市里的游藻",
     description: "现代性张力（语言实验与陌生化）",
     taskPrompt: TASK_POETRY_3,
+    family: "poetry",
+  },
+  {
+    id: EVAL_PRESET_ALGO_ANN_TRILLION,
+    name: "算法 · 千亿级向量 ANN",
+    description: "索引与查询（规模与硬件约束）",
+    taskPrompt: TASK_ALGO_ANN,
+    family: "algorithm",
+  },
+  {
+    id: EVAL_PRESET_ALGO_DYNAMIC_GRAPH_OOD,
+    name: "算法 · 动态图与 OOD",
+    description: "流式图与自适应推理",
+    taskPrompt: TASK_ALGO_DYNAMIC_GRAPH,
+    family: "algorithm",
+  },
+  {
+    id: EVAL_PRESET_ALGO_TOPO_CAUSAL,
+    name: "算法 · 拓扑与因果混合",
+    description: "全局约束与可扩展推断",
+    taskPrompt: TASK_ALGO_TOPO_CAUSAL,
+    family: "algorithm",
+  },
+  {
+    id: EVAL_PRESET_MATH_HYPERGRAPH,
+    name: "数学 · 超图 H(n) 下界（组合）",
+    description: "拉姆齐型构造与常数改进",
+    taskPrompt: TASK_MATH_HYPERGRAPH,
+    family: "math",
+  },
+  {
+    id: EVAL_PRESET_MATH_GALOIS_M23,
+    name: "数学 · 逆伽罗瓦与 M₂₃（数论）",
+    description: "整数多项式与伽罗瓦群",
+    taskPrompt: TASK_MATH_GALOIS_M23,
+    family: "math",
+  },
+  {
+    id: EVAL_PRESET_MATH_TENSOR,
+    name: "数学 · 张量集中不等式（概率/泛函）",
+    description: "高斯过程与张量范数",
+    taskPrompt: TASK_MATH_TENSOR,
+    family: "math",
+  },
+  {
+    id: EVAL_PRESET_LLM_SYS_GPU_SPARSE,
+    name: "硬件优化 · GPU 稀疏注意力算子",
+    description: "超长上下文与稀疏注意力内核",
+    taskPrompt: TASK_LLM_SYS_GPU_SPARSE,
+    family: "llm_systems",
+  },
+  {
+    id: EVAL_PRESET_LLM_SYS_KV_CLUSTER,
+    name: "硬件优化 · 千卡集群 KV 缓存",
+    description: "分布式 KV 与跨节点读写",
+    taskPrompt: TASK_LLM_SYS_KV_CLUSTER,
+    family: "llm_systems",
   },
 ];
 
@@ -155,8 +264,18 @@ export function getEvaluationPresetById(
   return BUILTIN_EVALUATION_PRESETS.find((p) => p.id === id);
 }
 
+/** 用于设置页 / 运行页标题：随当前命题家族切换 */
+export function getEvaluationThemeLabel(presetId: string): string {
+  const def = getEvaluationPresetById(presetId);
+  if (!def) return "诗歌评测";
+  if (def.family === "algorithm") return "算法设计";
+  if (def.family === "math") return "数学评测";
+  if (def.family === "llm_systems") return "硬件优化";
+  return "诗歌评测";
+}
+
 /**
- * 切换诗歌命题预设：更新题目与各 Judge 的 system/user；不修改 aggregator。
+ * 切换内置命题预设：更新题目、各 Judge 的 system/user，并按家族同步汇总模板。
  */
 export function applyEvaluationPreset(
   settings: GlobalSettings,
@@ -166,16 +285,44 @@ export function applyEvaluationPreset(
   if (!def) {
     return settings;
   }
+  const judgeSystem =
+    def.family === "algorithm"
+      ? ALGORITHM_JUDGE_SYSTEM
+      : def.family === "math"
+        ? MATH_JUDGE_SYSTEM
+        : def.family === "llm_systems"
+          ? LLM_SYSTEMS_JUDGE_SYSTEM
+          : POETRY_JUDGE_SYSTEM;
+  const judgeUser =
+    def.family === "algorithm"
+      ? ALGORITHM_JUDGE_USER
+      : def.family === "math"
+        ? MATH_JUDGE_USER
+        : def.family === "llm_systems"
+          ? LLM_SYSTEMS_JUDGE_USER
+          : POETRY_JUDGE_USER;
+  const aggPartial =
+    def.family === "algorithm"
+      ? getAlgorithmAggregatorPartial()
+      : def.family === "math"
+        ? getMathAggregatorPartial()
+        : def.family === "llm_systems"
+          ? getLlmSystemsAggregatorPartial()
+          : getPoetryAggregatorPartial();
   const judges = settings.judges.map((j) => ({
     ...j,
-    systemPrompt: POETRY_JUDGE_SYSTEM,
-    userPromptTemplate: POETRY_JUDGE_USER,
+    systemPrompt: judgeSystem,
+    userPromptTemplate: judgeUser,
   }));
   return {
     ...settings,
     evaluationPresetId: def.id,
     taskPrompt: def.taskPrompt,
     judges,
+    aggregator: {
+      ...settings.aggregator,
+      ...aggPartial,
+    },
   };
 }
 

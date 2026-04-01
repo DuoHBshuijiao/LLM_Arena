@@ -49,7 +49,7 @@ export interface GlobalSettings {
   aggregator: AggregatorConfig;
   /** 运行页评测题目全文（持久化） */
   taskPrompt: string;
-  /** 当前选中的内置诗歌命题预设 ID */
+  /** 当前选中的内置评测命题预设 ID（诗歌 / 算法设计 / 数学 / 硬件优化等） */
   evaluationPresetId: string;
 }
 
