@@ -8,6 +8,8 @@ export interface ApiPreset {
   concurrency: number;
   /** 手动保存的模型 ID，与「获取模型列表」结果合并到下拉框 */
   manualModelIds: string[];
+  /** 最近一次「获取模型列表」成功返回的 ID（持久化，与手动列表一并展示为标签） */
+  fetchedModelIds: string[];
 }
 
 export interface ModelEntry {
@@ -45,6 +47,10 @@ export interface GlobalSettings {
   models: ModelEntry[];
   judges: JudgeConfig[];
   aggregator: AggregatorConfig;
+  /** 运行页评测题目全文（持久化） */
+  taskPrompt: string;
+  /** 当前选中的内置诗歌命题预设 ID */
+  evaluationPresetId: string;
 }
 
 export interface JudgeRunResult {
