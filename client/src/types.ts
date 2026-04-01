@@ -86,9 +86,9 @@ export interface ThreadScoreInput {
   human?: number;
 }
 
-/** 分数计算器：参赛模型权重 + 人类分权重（均 0.1–1） */
+/** 分数计算器：各评委（Judge）填分权重 + 人类分权重（均 0.1–1） */
 export interface BlendWeights {
-  modelWeights: Record<string, number>;
+  judgeWeights: Record<string, number>;
   humanWeight: number;
 }
 
