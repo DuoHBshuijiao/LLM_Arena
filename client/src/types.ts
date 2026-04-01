@@ -77,7 +77,30 @@ export type ThreadPhase =
   | "generating"
   | "judging"
   | "aggregating"
-  | "done";
+  | "paused"
+  | "done"
+  | "error";
+
+/** 当前正在流式输出的卡片（用于 UI 角标） */
+export type StreamingCard =
+  | { kind: "gen" }
+  | { kind: "judge"; judgeId: string; reviewIndex: number }
+  | { kind: "aggregate" };
+
+/** 流水线失败时的步骤（用于重试与 UI 定位） */
+export type FailedPipelineStep =
+  | { step: "gen" }
+  | { step: "judge"; judgeId: string; reviewIndex: number }
+  | { step: "aggregate" };
+
+/** 单线程终态：进行中不填或视为未完成 */
+export type ThreadOutcome = "ok" | "error" | "abandoned";
+
+/** 并行 judge 时可能有多个槽位同时流式输出，用于角标（单槽 streamingCard 会竞态） */
+export interface JudgeStreamingSlot {
+  judgeId: string;
+  reviewIndex: number;
+}
 
 export interface GenerationResult {
   id: string;
@@ -93,6 +116,18 @@ export interface GenerationResult {
   /** 汇总思考（展示用） */
   aggregateReasoningText?: string;
   threadPhase: ThreadPhase;
+  /** 当前流式卡片（仅运行中有值） */
+  streamingCard?: StreamingCard;
+  /** 正在流式输出的 judge 槽位（并行 judge 时可能多项） */
+  judgeStreamingSlots?: JudgeStreamingSlot[];
+  /** 单线程失败时的可读错误 */
+  pipelineError?: string;
+  /** 失败步骤，供重试 */
+  failedPipelineStep?: FailedPipelineStep;
+  /** 用户暂停时的步骤，供恢复（与 failedPipelineStep 语义相同） */
+  pausedPipelineStep?: FailedPipelineStep;
+  /** 单线程终态；未结束时可省略 */
+  threadOutcome?: ThreadOutcome;
 }
 
 /** 单线程人工填分：每个评委一条 + 人类分 */
@@ -120,4 +155,33 @@ export interface RunSession {
   phase: RunPhase;
   generations: GenerationResult[];
   error?: string;
+}
+
+/** 保存成绩 / 历史快照 / 导出 JSON 共用结构 */
+export interface ScoreSnapshotComputed {
+  /** generation.id -> 单线程综合分 */
+  perThread: Record<string, number | undefined>;
+  /** modelId -> 本会话按模型均值 */
+  byModel: Record<string, number | undefined>;
+}
+
+export interface SavedScoreSnapshot {
+  /** 导出格式版本，便于以后演进 */
+  exportVersion: 1;
+  id: string;
+  savedAt: number;
+  prompt: string;
+  session: RunSession;
+  threadScores: Record<string, ThreadScoreInput>;
+  humanScores: Record<string, number>;
+  blendWeights: BlendWeights;
+  judgeIds: string[];
+  computed: ScoreSnapshotComputed;
+}
+
+/** 「下载全部数据」外层包装 */
+export interface ScoreHistoryExportFile {
+  exportBundleVersion: 1;
+  exportedAt: number;
+  entries: SavedScoreSnapshot[];
 }

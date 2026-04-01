@@ -1,4 +1,8 @@
-import type { BlendWeights, GenerationResult, ThreadScoreInput } from "./types";
+import type {
+  BlendWeights,
+  GenerationResult,
+  ThreadScoreInput,
+} from "./types";
 
 export const DEFAULT_BLEND_WEIGHTS: BlendWeights = {
   judgeWeights: {},
@@ -38,7 +42,10 @@ export function threadCompositeScore(
   input: ThreadScoreInput | undefined,
   judgeIds: string[],
   blend: BlendWeights,
+  generation?: GenerationResult,
 ): number | undefined {
+  if (generation?.threadOutcome === "abandoned") return 0;
+
   let numJ = 0;
   let denJ = 0;
   for (const jid of judgeIds) {
@@ -69,7 +76,7 @@ export function averageCompositeByModel(
 ): Record<string, number | undefined> {
   const sums: Record<string, { sum: number; n: number }> = {};
   for (const g of generations) {
-    const c = threadCompositeScore(threadScores[g.id], judgeIds, blend);
+    const c = threadCompositeScore(threadScores[g.id], judgeIds, blend, g);
     if (c === undefined) continue;
     if (!sums[g.modelId]) sums[g.modelId] = { sum: 0, n: 0 };
     sums[g.modelId].sum += c;
