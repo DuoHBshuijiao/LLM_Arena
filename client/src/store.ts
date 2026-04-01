@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { userFacingEvaluationError } from "./errorUtils";
+import {
+  applyEvaluationPreset,
+  applyPoetryJudgePrompts,
+  DEFAULT_EVALUATION_PRESET_ID,
+  getEvaluationPresetById,
+  getPoetryAggregatorPartial,
+} from "./evaluationPresets";
 import { executeEvaluation } from "./pipeline";
 import { DEFAULT_BLEND_WEIGHTS, normalizeBlendWeights } from "./scoreCalculations";
 import type {
@@ -18,7 +25,8 @@ function newId(): string {
 
 function createDefaultSettings(): GlobalSettings {
   const pid = newId();
-  return {
+  const agg = getPoetryAggregatorPartial();
+  const base: GlobalSettings = {
     apiPresets: [
       {
         id: pid,
@@ -26,6 +34,7 @@ function createDefaultSettings(): GlobalSettings {
         baseUrl: "https://api.openai.com",
         apiKey: "",
         manualModelIds: [],
+        fetchedModelIds: [],
         concurrency: 4,
       },
     ],
@@ -46,10 +55,8 @@ function createDefaultSettings(): GlobalSettings {
         name: "评委 A",
         presetId: pid,
         model: "gpt-4o-mini",
-        systemPrompt:
-          "你是向量检索与系统架构方向的评测专家。候选内容应针对「向量数据库 / ANN 近似最近邻」类算法与系统设计题。请从：问题边界是否清晰、索引与数据结构选型、插入/查询/更新的复杂度与量级、并行与分片、延迟与吞吐权衡、增量更新与可运维性等维度分析。先用自然语言分条写出分析，最后单独一行「综合分：X/10」（X 为 0–10）。",
-        userPromptTemplate:
-          "下面是对「向量数据库 / ANN 检索、性能优先」设计题的回答，请按 system 要求评价。\n\n【候选回答】\n{{candidate}}",
+        systemPrompt: "",
+        userPromptTemplate: "",
         reviewCount: 1,
       },
     ],
@@ -57,12 +64,14 @@ function createDefaultSettings(): GlobalSettings {
       enabled: true,
       presetId: pid,
       model: "gpt-4o-mini",
-      systemPrompt:
-        "你是技术评审秘书。阅读各评委对同一道「向量数据库 / ANN、性能优先」设计题的全文评价后，用不超过200字的中文：分述每位评委给出的分数与意见，并概括共识与分歧。",
-      userPromptTemplate:
-        "【题目类型】向量数据库 / ANN 检索系统设计（性能优先）。\n\n【候选答案】\n{{candidate}}\n\n【各评委原始输出】\n{{reviews}}\n\n请在200字以内按 system 要求汇总。",
+      systemPrompt: agg.systemPrompt,
+      userPromptTemplate: agg.userPromptTemplate,
     },
+    taskPrompt: "",
+    evaluationPresetId: DEFAULT_EVALUATION_PRESET_ID,
   };
+  const withJudges = applyPoetryJudgePrompts(base);
+  return applyEvaluationPreset(withJudges, DEFAULT_EVALUATION_PRESET_ID);
 }
 
 const defaultSettings: GlobalSettings = createDefaultSettings();
@@ -240,7 +249,7 @@ export const useArenaStore = create<ArenaState>()(
     }),
     {
       name: "llm-arena",
-      version: 7,
+      version: 9,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted, fromVersion) => {
         const p = persisted as {
@@ -262,6 +271,7 @@ export const useArenaStore = create<ArenaState>()(
                 baseUrl: s.baseUrl ?? "https://api.openai.com",
                 apiKey: s.apiKey ?? "",
                 manualModelIds: [],
+                fetchedModelIds: [],
                 concurrency: Math.max(1, s.concurrency ?? 4),
               },
             ],
@@ -299,6 +309,11 @@ export const useArenaStore = create<ArenaState>()(
             )
               ? (ap as { manualModelIds: string[] }).manualModelIds
               : [],
+            fetchedModelIds: Array.isArray(
+              (ap as { fetchedModelIds?: string[] }).fetchedModelIds,
+            )
+              ? (ap as { fetchedModelIds: string[] }).fetchedModelIds
+              : [],
           }));
         }
         if (fromVersion < 4) {
@@ -331,6 +346,41 @@ export const useArenaStore = create<ArenaState>()(
           st.blendWeights = normalizeBlendWeights(
             st.blendWeights as BlendWeights | undefined,
           );
+        }
+        if (fromVersion < 8 && p.settings) {
+          const s = p.settings as GlobalSettings;
+          const apiPid = s.apiPresets?.[0]?.id ?? "";
+          let next: GlobalSettings = {
+            ...s,
+            taskPrompt:
+              typeof s.taskPrompt === "string" && s.taskPrompt.trim()
+                ? s.taskPrompt
+                : "",
+            evaluationPresetId:
+              typeof s.evaluationPresetId === "string" &&
+              getEvaluationPresetById(s.evaluationPresetId)
+                ? s.evaluationPresetId
+                : DEFAULT_EVALUATION_PRESET_ID,
+            aggregator: {
+              enabled: s.aggregator?.enabled ?? true,
+              presetId: s.aggregator?.presetId ?? apiPid,
+              model: s.aggregator?.model ?? "",
+              ...getPoetryAggregatorPartial(),
+            },
+          };
+          next = applyPoetryJudgePrompts(next);
+          const presetId =
+            getEvaluationPresetById(next.evaluationPresetId)?.id ??
+            DEFAULT_EVALUATION_PRESET_ID;
+          next = applyEvaluationPreset(next, presetId);
+          next = {
+            ...next,
+            aggregator: {
+              ...next.aggregator,
+              ...getPoetryAggregatorPartial(),
+            },
+          };
+          p.settings = next;
         }
         if (fromVersion < 5 && p.settings) {
           const oldGlobal =
