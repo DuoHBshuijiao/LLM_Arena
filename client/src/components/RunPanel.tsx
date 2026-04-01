@@ -1,6 +1,9 @@
 import { useMemo } from "react";
 import { uniqueModelIds } from "../chartUtils";
-import { BUILTIN_EVALUATION_PRESETS } from "../evaluationPresets";
+import {
+  BUILTIN_EVALUATION_PRESETS,
+  getEvaluationThemeLabel,
+} from "../evaluationPresets";
 import { averageCompositeByModel, clampBlendWeight } from "../scoreCalculations";
 import { settingsReadyForRun } from "../settingsHelpers";
 import type { BlendWeights, GlobalSettings, RunSession, ThreadScoreInput } from "../types";
@@ -112,7 +115,9 @@ export function RunPanel({
         </div>
 
         <div className="field run-page__preset-field">
-          <label htmlFor="run-eval-preset">预设题目（诗歌评测）</label>
+          <label htmlFor="run-eval-preset">
+            预设题目（{getEvaluationThemeLabel(settings.evaluationPresetId)}）
+          </label>
           <select
             id="run-eval-preset"
             value={settings.evaluationPresetId}
@@ -127,7 +132,7 @@ export function RunPanel({
             ))}
           </select>
           <p className="muted small run-page__preset-hint">
-            切换后将载入该题全文并同步评委提示词；可在下方继续微调题目。汇总模型提示词不随此处切换（见「设置」）。
+            切换后将载入该题全文并同步评委与汇总默认提示词（按诗歌评测 / 算法设计 / 数学评测 / 硬件优化）；可在下方继续微调题目，也可在「设置」中再改汇总文案。
           </p>
         </div>
 
@@ -198,7 +203,9 @@ export function RunPanel({
             <p className="muted">
               同一条评测提示词按 API 预设的并发上限流式调用：各线程生成完成后立即进入
               Judge（多评委限流并行），再按需汇总。并发上限在「设置」的每个 API
-              预设中配置，同一预设下的参赛 / Judge / 汇总共享。本主题为诗歌评测，可在上方切换三套预设题目。评测结束后在线程下方填入人工分，并在「分数计算器」中查看按模型的最终得分（≤10）。与按模型的整体验收对比见「人工分与图表」标签页。
+              预设中配置，同一预设下的参赛 / Judge / 汇总共享。
+              {`当前评测主题为「${getEvaluationThemeLabel(settings.evaluationPresetId)}」，可在上方切换内置预设题目。`}
+              评测结束后在线程下方填入人工分，并在「分数计算器」中查看按模型的最终得分（≤10）。与按模型的整体验收对比见「人工分与图表」标签页。
             </p>
           </div>
         </details>

@@ -3,6 +3,7 @@ import { fetchModelsList } from "../apiModels";
 import {
   applyEvaluationPreset,
   BUILTIN_EVALUATION_PRESETS,
+  getEvaluationThemeLabel,
   POETRY_JUDGE_SYSTEM,
   POETRY_JUDGE_USER,
 } from "../evaluationPresets";
@@ -160,10 +161,12 @@ export function SettingsPanel({ settings, onChange }: Props) {
         配置与评测结果保存在本机浏览器 localStorage；清除站点数据会丢失。
       </p>
 
-      <h3 className="section-title">诗歌评测 · 预设题目</h3>
+      <h3 className="section-title">
+        {getEvaluationThemeLabel(settings.evaluationPresetId)} · 预设题目
+      </h3>
       <p className="muted small">
-        与「运行与结果」页共用同一选项。切换后将更新题目与各评委的 system/user
-        模板；汇总模型的提示词不随命题切换（可在下方「汇总模型」中单独编辑）。
+        与「运行与结果」页共用同一选项。切换后将更新题目、各评委的 system/user
+        模板，并按命题家族（诗歌评测 / 算法设计 / 数学评测 / 硬件优化）同步汇总模型的默认提示词；仍可在下方「汇总模型」中单独编辑。
       </p>
       <div className="field">
         <label htmlFor="eval-preset-select">预设题目</label>

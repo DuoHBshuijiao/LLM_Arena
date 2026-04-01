@@ -29,8 +29,8 @@
   --color-muted: oklch(49% 0.022 330);
   --color-border: oklch(87.5% 0.028 350);
   --color-border-soft: oklch(91.5% 0.02 350);
-  --color-accent: oklch(47% 0.1 348);
-  --color-accent-hover: oklch(42% 0.1 348);
+  --color-accent: oklch(48% 0.085 348);
+  --color-accent-hover: oklch(43% 0.085 348);
   --color-accent-subtle: oklch(94.5% 0.03 350);
   --color-accent-text: oklch(34% 0.085 345);
   --color-link: oklch(45% 0.11 348);
@@ -38,12 +38,12 @@
   --color-warn: oklch(50% 0.12 75);
   --color-error: oklch(48% 0.17 25);
   --color-success: oklch(46% 0.12 165);
-  --color-canvas: oklch(91% 0.032 350);
-  --color-canvas-toolbar: oklch(87.5% 0.038 350);
-  --color-chart-a: oklch(54% 0.12 348);
-  --color-chart-b: oklch(63% 0.095 58);
-  --shadow-soft: 0 1px 2px oklch(38% 0.03 350 / 0.08);
-  --shadow-card: 0 4px 24px oklch(30% 0.06 350 / 0.11);
+  --color-canvas: oklch(92% 0.024 350);
+  --color-canvas-toolbar: oklch(88.5% 0.028 350);
+  --color-chart-a: oklch(55% 0.1 348);
+  --color-chart-b: oklch(64% 0.08 58);
+  --shadow-soft: 0 1px 2px oklch(38% 0.025 350 / 0.06);
+  --shadow-card: 0 3px 18px oklch(30% 0.045 350 / 0.075);
 
   /* 排版：层次、字重与行高（工具型界面，正文 ≥16px） */
   --font-sans: "Plus Jakarta Sans", system-ui, "Segoe UI", "PingFang SC",
@@ -165,12 +165,12 @@ body {
   background:
     radial-gradient(
       ellipse 130% 90% at 100% -15%,
-      oklch(92% 0.055 350 / 0.45),
+      oklch(92% 0.04 350 / 0.28),
       transparent 52%
     ),
     radial-gradient(
       ellipse 100% 70% at -5% 105%,
-      oklch(93% 0.04 58 / 0.38),
+      oklch(93% 0.028 58 / 0.22),
       transparent 48%
     ),
     var(--color-bg);
@@ -195,14 +195,14 @@ a {
 
 @media (prefers-reduced-motion: no-preference) {
   .app-tab-panel {
-    animation: app-tab-panel-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: app-tab-panel-in 0.38s cubic-bezier(0.25, 1, 0.35, 1) both;
   }
 }
 
 @keyframes app-tab-panel-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(5px);
   }
 
   to {
@@ -218,24 +218,24 @@ a {
   column-gap: var(--space-5);
   row-gap: var(--space-3);
   margin-bottom: var(--section-gap);
-  border-bottom: 3px solid
+  border-bottom: 1px solid
     color-mix(
       in oklch,
-      var(--color-rose-gold) 38%,
-      color-mix(in oklch, var(--color-accent) 42%, var(--color-border))
+      var(--color-rose-gold) 28%,
+      color-mix(in oklch, var(--color-accent) 32%, var(--color-border))
     );
   padding-bottom: var(--space-5);
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .app-header {
-    animation: app-header-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: app-header-in 0.45s cubic-bezier(0.25, 1, 0.35, 1) both;
   }
 
   @keyframes app-header-in {
     from {
       opacity: 0;
-      transform: translateY(-8px);
+      transform: translateY(-5px);
     }
 
     to {
@@ -259,19 +259,19 @@ a {
   margin: 0;
   font-family: var(--font-display);
   font-size: clamp(1.45rem, 4.2vw, 1.95rem);
-  font-weight: 700;
-  letter-spacing: -0.045em;
+  font-weight: 600;
+  letter-spacing: -0.04em;
   line-height: 1.1;
   color: var(--color-text-strong);
 }
 
 .app-title__mark {
-  font-weight: 800;
+  font-weight: 600;
   color: var(--color-rose-gold-deep);
 }
 
 .app-title__rest {
-  font-weight: 600;
+  font-weight: 500;
   color: oklch(31% 0.028 350);
 }
 
@@ -304,20 +304,20 @@ a {
 }
 
 .app-nav button.active {
-  border-color: color-mix(in oklch, var(--color-rose-gold) 55%, var(--color-border));
+  border-color: color-mix(in oklch, var(--color-rose-gold) 42%, var(--color-border));
   background: color-mix(in oklch, var(--color-accent-subtle) 65%, var(--color-surface));
   color: var(--color-accent-text);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   box-shadow:
-    0 2px 14px oklch(38% 0.08 350 / 0.14),
-    0 0 0 1px color-mix(in oklch, var(--color-rose-gold-faint) 80%, transparent);
+    0 1px 8px oklch(38% 0.05 350 / 0.09),
+    0 0 0 1px color-mix(in oklch, var(--color-rose-gold-faint) 65%, transparent);
 }
 
 .panel {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-top: 3px solid
-    color-mix(in oklch, var(--color-rose-gold) 52%, color-mix(in oklch, var(--color-accent) 48%, var(--color-border)));
+  border-top: 2px solid
+    color-mix(in oklch, var(--color-rose-gold) 38%, color-mix(in oklch, var(--color-accent) 38%, var(--color-border)));
   border-radius: 12px;
   padding: var(--space-5) var(--space-6);
   box-shadow: var(--shadow-card);
@@ -333,10 +333,10 @@ a {
 .panel h2 {
   margin: 0 0 var(--space-3);
   font-size: var(--text-heading);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
   color: var(--color-text-strong);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.018em;
 }
 
 .section-title {
@@ -637,15 +637,15 @@ a {
 .btn-primary {
   background: var(--color-accent);
   border: 1px solid
-    color-mix(in oklch, var(--color-rose-gold) 35%, color-mix(in oklch, var(--color-accent) 82%, var(--color-text-strong)));
+    color-mix(in oklch, var(--color-rose-gold) 28%, color-mix(in oklch, var(--color-accent) 78%, var(--color-text-strong)));
   color: oklch(99% 0.008 350);
   padding: var(--space-2) var(--space-4);
   border-radius: 8px;
   cursor: pointer;
   font: inherit;
-  font-weight: var(--weight-semibold);
-  box-shadow: 0 2px 0
-    color-mix(in oklch, var(--color-rose-gold-deep) 22%, color-mix(in oklch, var(--color-accent-hover) 58%, var(--color-text-strong)));
+  font-weight: var(--weight-medium);
+  box-shadow: 0 1px 0
+    color-mix(in oklch, var(--color-rose-gold-deep) 18%, color-mix(in oklch, var(--color-accent-hover) 52%, var(--color-text-strong)));
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -959,7 +959,7 @@ details.gen pre {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: min(72vh, 920px);
+  min-height: min(92vh, 2000px);
   background: var(--color-canvas);
   border: 1px solid var(--color-border);
   border-radius: 10px;
@@ -994,6 +994,8 @@ details.gen pre {
   cursor: grab;
   touch-action: none;
   min-height: 0;
+  /* 画布可视区域显著加高，便于长内容与多线程浏览 */
+  min-height: min(78vh, 1600px);
 }
 
 .run-canvas-viewport--panning,
@@ -1015,43 +1017,42 @@ details.gen pre {
 
 .run-canvas-grid {
   display: grid;
-  gap: clamp(28px, 4vw, 72px);
-  padding: 48px 56px 120px;
+  /* grid-template-columns / gap 由内联按 THREADS_PER_ROW 与 CARD_MIN_W 设置 */
   width: max-content;
-  min-width: 100%;
+  padding: 48px 56px 120px;
   box-sizing: border-box;
   align-items: start;
+  justify-items: center;
+  grid-auto-rows: min-content;
 }
 
 .thread-column {
-  /* 离屏列跳过渲染，减轻大量卡片时的布局/绘制成本（与 WebGPU 无关：文本仍为 DOM） */
-  content-visibility: auto;
-  contain-intrinsic-size: 280px 680px;
+  /* 不使用 content-visibility:auto：会跳过子树绘制，导致流程 SVG 边线在部分浏览器中不可见 */
   width: 100%;
-  max-width: 320px;
+  max-width: 600px;
   min-width: min(248px, 100%);
   min-height: 0;
-  border: 2px solid var(--thread-frame, var(--color-thread-fallback));
+  border: 1.5px solid var(--thread-frame, var(--color-thread-fallback));
   border-radius: 12px;
   background: linear-gradient(
     180deg,
     var(--color-surface) 0%,
-    var(--color-elevated) 100%
+    color-mix(in oklch, var(--color-elevated) 92%, var(--color-surface)) 100%
   );
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-soft);
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .thread-column--animate {
-    animation: thread-column-arrange 0.52s cubic-bezier(0.22, 1, 0.36, 1) both;
-    animation-delay: calc(min(var(--thread-stagger, 0), 16) * 0.09s);
+    animation: thread-column-arrange 0.44s cubic-bezier(0.25, 1, 0.35, 1) both;
+    animation-delay: calc(min(var(--thread-stagger, 0), 16) * 0.07s);
   }
 }
 
 @keyframes thread-column-arrange {
   from {
     opacity: 0;
-    transform: translateY(12px) scale(0.985);
+    transform: translateY(8px) scale(0.992);
   }
 
   to {
@@ -1087,7 +1088,101 @@ details.gen pre {
   flex-direction: column;
   align-items: center;
   padding: 0.65rem 0.65rem 1rem;
-  gap: 0.45rem;
+  gap: 0.6rem;
+}
+
+.thread-thread-tree {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.thread-thread-tree__edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.thread-thread-tree__nodes {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1.15rem;
+  width: 100%;
+}
+
+.thread-thread-tree__anchor {
+  width: 100%;
+}
+
+.thread-thread-tree__summary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+
+.judge-columns {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: clamp(14px, 2.5vw, 24px);
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.judge-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 260px;
+  width: 260px;
+  min-width: 260px;
+  max-width: 260px;
+}
+
+.judge-column__title {
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--color-muted);
+  text-align: center;
+  width: 100%;
+  line-height: var(--leading-snug);
+}
+
+.judge-column__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+
+.judge-column__round {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+
+.judge-column .run-canvas-card {
+  width: 100%;
 }
 
 .run-flow-arrow {
@@ -1104,11 +1199,11 @@ details.gen pre {
 
 @media (prefers-reduced-motion: no-preference) {
   .run-flow-arrow__line {
-    animation: run-flow-arrow-draw 0.48s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation: run-flow-arrow-draw 0.4s cubic-bezier(0.25, 1, 0.35, 1) forwards;
   }
 
   .run-flow-arrow__marker-shape {
-    animation: run-flow-arrow-head 0.32s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+    animation: run-flow-arrow-head 0.26s cubic-bezier(0.25, 1, 0.35, 1) 0.16s both;
   }
 }
 
@@ -1138,14 +1233,14 @@ details.gen pre {
 
 @media (prefers-reduced-motion: no-preference) {
   .run-canvas-flow-block {
-    animation: run-canvas-flow-block-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: run-canvas-flow-block-in 0.36s cubic-bezier(0.25, 1, 0.35, 1) both;
   }
 }
 
 @keyframes run-canvas-flow-block-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(5px);
   }
 
   to {
@@ -1156,14 +1251,14 @@ details.gen pre {
 
 @media (prefers-reduced-motion: no-preference) {
   .run-canvas-card--pop {
-    animation: run-canvas-card-pop 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: run-canvas-card-pop 0.34s cubic-bezier(0.25, 1, 0.35, 1) both;
   }
 }
 
 @keyframes run-canvas-card-pop {
   from {
     opacity: 0;
-    transform: translateY(7px) scale(0.99);
+    transform: translateY(4px) scale(0.995);
   }
 
   to {
@@ -1197,11 +1292,11 @@ details.gen pre {
 
 .run-canvas-card {
   width: 100%;
-  border: 2px solid var(--card-frame, color-mix(in oklch, var(--color-accent) 35%, var(--color-border)));
+  border: 1.5px solid var(--card-frame, color-mix(in oklch, var(--color-accent) 28%, var(--color-border)));
   border-radius: 10px;
   background: var(--color-surface);
   overflow: hidden;
-  box-shadow: var(--shadow-soft);
+  box-shadow: 0 1px 1px oklch(38% 0.02 350 / 0.04);
 }
 
 .run-canvas-card--gen {
@@ -1217,8 +1312,8 @@ details.gen pre {
   border-color: var(--card-frame);
   background: linear-gradient(
     180deg,
-    color-mix(in oklch, var(--color-surface) 92%, var(--color-accent-subtle)) 0%,
-    var(--color-accent-subtle) 100%
+    color-mix(in oklch, var(--color-surface) 94%, var(--color-accent-subtle)) 0%,
+    color-mix(in oklch, var(--color-accent-subtle) 88%, var(--color-surface)) 100%
   );
 }
 
@@ -1496,20 +1591,20 @@ details.gen pre {
 .thread-score-bar {
   border-top: 1px solid var(--color-border-soft);
   padding: 0.5rem 0.65rem 0.65rem;
-  background: color-mix(in oklch, var(--color-accent-subtle) 55%, var(--color-surface));
+  background: color-mix(in oklch, var(--color-accent-subtle) 42%, var(--color-surface));
   border-radius: 0 0 10px 10px;
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .thread-score-bar--animate {
-    animation: thread-score-bar-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: thread-score-bar-in 0.32s cubic-bezier(0.25, 1, 0.35, 1) both;
   }
 }
 
 @keyframes thread-score-bar-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(3px);
   }
 
   to {
