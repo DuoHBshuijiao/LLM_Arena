@@ -38,6 +38,13 @@ export interface AggregatorConfig {
   userPromptTemplate: string;
 }
 
+/** 用户自定义评测命题（名称可改，题目正文持久化在本条内） */
+export interface CustomEvaluationPresetEntry {
+  id: string;
+  name: string;
+  taskPrompt: string;
+}
+
 export interface GlobalSettings {
   apiPresets: ApiPreset[];
   /** 留空则不传给 API，由上游默认值决定 */
@@ -49,8 +56,10 @@ export interface GlobalSettings {
   aggregator: AggregatorConfig;
   /** 运行页评测题目全文（持久化） */
   taskPrompt: string;
-  /** 当前选中的内置评测命题预设 ID（诗歌 / 算法设计 / 数学 / 硬件优化等） */
+  /** 当前选中的评测命题预设 ID（内置含诗歌、算法、数学、硬件优化、命题作文等，或自定义） */
   evaluationPresetId: string;
+  /** 用户自定义题目列表（内置题不在此列） */
+  customEvaluationPresets: CustomEvaluationPresetEntry[];
 }
 
 export interface JudgeRunResult {
