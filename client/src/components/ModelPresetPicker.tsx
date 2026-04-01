@@ -1,4 +1,8 @@
+import { useId, useMemo } from "react";
 import type { ApiPreset } from "../types";
+import { CustomSelect } from "./CustomSelect";
+
+const MODEL_PLACEHOLDER = { value: "", label: "请选择模型…" };
 
 interface Props {
   presets: ApiPreset[];
@@ -23,43 +27,52 @@ export function ModelPresetPicker({
   onRefreshModels,
   refreshPending,
 }: Props) {
+  const uid = useId().replace(/:/g, "");
+  const presetSelectId = `${uid}-preset`;
+  const modelSelectId = `${uid}-model`;
   const list = modelsByPreset[presetId] ?? [];
   const missing = Boolean(modelId.trim() && !list.includes(modelId));
+
+  const presetOptions = useMemo(
+    () => presets.map((p) => ({ value: p.id, label: p.name })),
+    [presets],
+  );
+
+  const modelOptions = useMemo(() => {
+    const out: { value: string; label: string }[] = [];
+    if (missing) {
+      out.push({
+        value: modelId,
+        label: `${modelId}（当前值，未在已拉取列表中）`,
+      });
+    }
+    for (const id of list) {
+      out.push({ value: id, label: id });
+    }
+    return out;
+  }, [list, missing, modelId]);
 
   return (
     <div className="model-preset-picker">
       <div className="field">
-        <label>API 预设</label>
-        <select
+        <label htmlFor={presetSelectId}>API 预设</label>
+        <CustomSelect
+          id={presetSelectId}
           value={presetId}
-          onChange={(e) => onPresetChange(e.target.value)}
-        >
-          {presets.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          onChange={onPresetChange}
+          options={presetOptions}
+        />
       </div>
       <div className="field flex-grow">
-        <label>模型</label>
+        <label htmlFor={modelSelectId}>模型</label>
         <div className="model-select-row">
-          <select
+          <CustomSelect
+            id={modelSelectId}
             value={modelId}
-            onChange={(e) => onModelChange(e.target.value)}
-          >
-            <option value="">请选择模型…</option>
-            {missing && (
-              <option value={modelId}>
-                {modelId}（当前值，未在已拉取列表中）
-              </option>
-            )}
-            {list.map((id) => (
-              <option key={id} value={id}>
-                {id}
-              </option>
-            ))}
-          </select>
+            onChange={onModelChange}
+            options={modelOptions}
+            placeholderOption={MODEL_PLACEHOLDER}
+          />
           {onRefreshModels && (
             <button
               type="button"
@@ -73,7 +86,8 @@ export function ModelPresetPicker({
         </div>
         {list.length === 0 && !missing && (
           <p className="hint-inline">
-            请在上方对应预设中「获取模型列表」或「手动添加模型 ID」。
+            请在上方对应预设中「获取模型列表」并在弹层中勾选确认，或「手动添加模型
+            ID」。
           </p>
         )}
       </div>
