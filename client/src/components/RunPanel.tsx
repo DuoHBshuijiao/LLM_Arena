@@ -1,4 +1,4 @@
-import { useId, useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import { uniqueModelIds } from "../chartUtils";
 import {
   customEvaluationPresetsSafe,
@@ -6,8 +6,12 @@ import {
   getEvaluationThemeLabel,
 } from "../evaluationPresets";
 import { averageCompositeByModel, clampBlendWeight } from "../scoreCalculations";
+import { saveScoreSnapshot } from "../scoreApi";
+import { buildSavedScoreSnapshot } from "../scoreSnapshot";
 import { settingsReadyForRun } from "../settingsHelpers";
+import { useArenaStore } from "../store";
 import type { BlendWeights, GlobalSettings, RunSession, ThreadScoreInput } from "../types";
+import { ConfirmModal } from "./ConfirmModal";
 import { CustomSelect } from "./CustomSelect";
 import { RunCanvas } from "./RunCanvas";
 
@@ -41,6 +45,15 @@ interface Props {
   setHumanBlendWeight: (w: number) => void;
   onRun: (prompt: string) => void;
   onCancel: () => void;
+  onRetryThread: (genId: string) => void;
+  onAbandonThread: (genId: string) => void;
+  onPauseThread: (genId: string) => void;
+  onAbortJudgeSlot: (
+    genId: string,
+    judgeId: string,
+    reviewIndex: number,
+  ) => void;
+  onCancelThread: (genId: string) => void;
   onClearSession: () => void;
   onTaskPromptChange: (taskPrompt: string) => void;
   onEvaluationPresetChange: (presetId: string) => void;
@@ -74,12 +87,20 @@ export function RunPanel({
   setHumanBlendWeight,
   onRun,
   onCancel,
+  onRetryThread,
+  onAbandonThread,
+  onPauseThread,
+  onAbortJudgeSlot,
+  onCancelThread,
   onClearSession,
   onTaskPromptChange,
   onEvaluationPresetChange,
   running,
   phase,
 }: Props) {
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [savingScores, setSavingScores] = useState(false);
+  const [saveScoreMessage, setSaveScoreMessage] = useState<string | null>(null);
   const taskPromptFieldId = useId();
   const est = useMemo(() => estimateCalls(settings), [settings]);
   const ready = useMemo(() => settingsReadyForRun(settings), [settings]);
@@ -108,6 +129,36 @@ export function RunPanel({
     () => (session ? uniqueModelIds(session.generations) : []),
     [session],
   );
+
+  const canSaveScores =
+    !!session &&
+    session.phase === "done" &&
+    session.generations.length > 0;
+
+  const onSaveScores = async () => {
+    if (!session || session.phase !== "done" || !session.generations.length) {
+      return;
+    }
+    setSaveScoreMessage(null);
+    const st = useArenaStore.getState();
+    const snapshot = buildSavedScoreSnapshot({
+      session,
+      threadScores: st.threadScores as Record<string, ThreadScoreInput>,
+      humanScores: st.humanScores,
+      blendWeights,
+      judgeIds,
+    });
+    setSavingScores(true);
+    try {
+      await saveScoreSnapshot(snapshot);
+      setSaveScoreMessage("已保存到本地 data/scores（请在「人工分与图表」中查看或下载）。");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveScoreMessage(`保存失败：${msg}（请确认本地代理已启动）`);
+    } finally {
+      setSavingScores(false);
+    }
+  };
 
   return (
     <div className="run-page">
@@ -168,10 +219,23 @@ export function RunPanel({
             type="button"
             className="btn-ghost"
             disabled={!running}
-            onClick={onCancel}
+            onClick={() => setCancelConfirmOpen(true)}
           >
             取消
           </button>
+          {cancelConfirmOpen ? (
+            <ConfirmModal
+              title="确认取消评测？"
+              message="将立即中断所有流式请求；已显示在画布上的生成与评委内容会保留。"
+              confirmLabel="确认取消"
+              cancelLabel="继续运行"
+              onConfirm={() => {
+                onCancel();
+                setCancelConfirmOpen(false);
+              }}
+              onCancel={() => setCancelConfirmOpen(false)}
+            />
+          ) : null}
           <button
             type="button"
             className="btn-ghost"
@@ -179,6 +243,19 @@ export function RunPanel({
             onClick={onClearSession}
           >
             清空结果
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={running || !canSaveScores || savingScores}
+            onClick={() => void onSaveScores()}
+            title={
+              canSaveScores
+                ? "将线程原始数据与计算后的成绩保存到项目 data/scores 目录（需本地代理）"
+                : "评测完成后且存在生成线程时可保存"
+            }
+          >
+            {savingScores ? "保存中…" : "保存成绩"}
           </button>
           {(running || session) && (
             <span className="badge">
@@ -188,6 +265,18 @@ export function RunPanel({
             </span>
           )}
         </div>
+        {saveScoreMessage ? (
+          <p
+            className={
+              saveScoreMessage.startsWith("保存失败")
+                ? "warn warn--block"
+                : "muted"
+            }
+            role={saveScoreMessage.startsWith("保存失败") ? "alert" : "status"}
+          >
+            {saveScoreMessage}
+          </p>
+        ) : null}
         {!ready && (
           <p className="warn">
             请先在「设置」里为每个 API 预设填写 Key，并选好参赛模型以及 Judge /
@@ -197,11 +286,6 @@ export function RunPanel({
         {session?.error && (
           <p className="warn warn--block" role="alert">
             {session.error}
-          </p>
-        )}
-        {session && (
-          <p className="muted run-page__prompt-preview">
-            提示词：<span className="prompt-inline">{session.prompt}</span>
           </p>
         )}
 
@@ -318,6 +402,11 @@ export function RunPanel({
         threadScores={threadScores}
         setThreadJudgeScore={setThreadJudgeScore}
         setThreadHumanScore={setThreadHumanScore}
+        onRetryThread={onRetryThread}
+        onAbandonThread={onAbandonThread}
+        onPauseThread={onPauseThread}
+        onAbortJudgeSlot={onAbortJudgeSlot}
+        onCancelThread={onCancelThread}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { fetchModelsList } from "../apiModels";
 import {
   addCustomEvaluationPreset,
@@ -7,9 +7,8 @@ import {
   customEvaluationPresetsSafe,
   deleteCustomEvaluationPreset,
   getEvaluationPresetSelectOptions,
+  getDefaultJudgePromptTemplatesForSettings,
   getEvaluationThemeLabel,
-  POETRY_JUDGE_SYSTEM,
-  POETRY_JUDGE_USER,
   updateCustomEvaluationPresetName,
 } from "../evaluationPresets";
 import type { ApiPreset, GlobalSettings, JudgeConfig, ModelEntry } from "../types";
@@ -76,6 +75,20 @@ export function SettingsPanel({ settings, onChange }: Props) {
     Record<string, string>
   >({});
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>(null);
+  const [selectedApiPresetId, setSelectedApiPresetId] = useState("");
+  const [selectedJudgeId, setSelectedJudgeId] = useState("");
+
+  useEffect(() => {
+    const ids = settings.apiPresets.map((p) => p.id);
+    if (ids.length === 0) return;
+    setSelectedApiPresetId((cur) => (cur && ids.includes(cur) ? cur : ids[0]));
+  }, [settings.apiPresets]);
+
+  useEffect(() => {
+    const ids = settings.judges.map((j) => j.id);
+    if (ids.length === 0) return;
+    setSelectedJudgeId((cur) => (cur && ids.includes(cur) ? cur : ids[0]));
+  }, [settings.judges]);
 
   const customEvalNameAtFocusRef = useRef<Record<string, string>>({});
 
@@ -86,6 +99,17 @@ export function SettingsPanel({ settings, onChange }: Props) {
   );
 
   const firstPresetId = settings.apiPresets[0]?.id ?? "";
+
+  const selectedApiIdx = settings.apiPresets.findIndex(
+    (p) => p.id === selectedApiPresetId,
+  );
+  const selectedJudgeIdx = settings.judges.findIndex(
+    (j) => j.id === selectedJudgeId,
+  );
+  const selectedApiPreset =
+    selectedApiIdx >= 0 ? settings.apiPresets[selectedApiIdx] : null;
+  const selectedJudge =
+    selectedJudgeIdx >= 0 ? settings.judges[selectedJudgeIdx] : null;
 
   /** 拉取列表 + 手动保存的 ID 合并（供下拉框） */
   const mergedModelsByPreset = useMemo(() => {
@@ -163,11 +187,12 @@ export function SettingsPanel({ settings, onChange }: Props) {
   );
 
   const addPreset = () => {
+    const id = newId();
     patch({
       apiPresets: [
         ...settings.apiPresets,
         {
-          id: newId(),
+          id,
           name: `预设 ${settings.apiPresets.length + 1}`,
           baseUrl: "https://api.openai.com",
           apiKey: "",
@@ -177,6 +202,7 @@ export function SettingsPanel({ settings, onChange }: Props) {
         },
       ],
     });
+    setSelectedApiPresetId(id);
   };
 
   const addManualModelId = (presetIdx: number) => {
@@ -417,160 +443,222 @@ export function SettingsPanel({ settings, onChange }: Props) {
                 {fetchError}
               </p>
             )}
-            {settings.apiPresets.map((preset, idx) => (
-              <div key={preset.id} className="settings-preset">
-          <div className="row">
-            <div className="field">
-              <label htmlFor={`${fid}-preset-name-${preset.id}`}>预设名称</label>
-              <input
-                id={`${fid}-preset-name-${preset.id}`}
-                value={preset.name}
-                onChange={(e) =>
-                  updatePreset(idx, { ...preset, name: e.target.value })
-                }
-                placeholder="例如：OpenAI 官方"
-              />
-            </div>
-            <div className="field flex-grow">
-              <label htmlFor={`${fid}-preset-base-${preset.id}`}>
-                Base URL（OpenAI 兼容）
-              </label>
-              <input
-                id={`${fid}-preset-base-${preset.id}`}
-                value={preset.baseUrl}
-                onChange={(e) =>
-                  updatePreset(idx, { ...preset, baseUrl: e.target.value })
-                }
-                placeholder="https://api.openai.com"
-              />
-            </div>
-          </div>
-          <div className="row">
-            <div className="field flex-grow">
-              <label htmlFor={`${fid}-preset-key-${preset.id}`}>API Key</label>
-              <input
-                id={`${fid}-preset-key-${preset.id}`}
-                type="password"
-                autoComplete="off"
-                value={preset.apiKey}
-                onChange={(e) =>
-                  updatePreset(idx, { ...preset, apiKey: e.target.value })
-                }
-                placeholder="sk-..."
-              />
-            </div>
-            <div className="field preset-actions">
-              <label htmlFor={`${fid}-preset-fetch-${preset.id}`}>
-                模型列表
-              </label>
-              <div className="preset-actions-inner">
-                <button
-                  id={`${fid}-preset-fetch-${preset.id}`}
-                  type="button"
-                  className="btn-primary"
-                  disabled={fetchingPresetId === preset.id}
-                  onClick={() => fetchForPreset(preset.id)}
-                >
-                  {fetchingPresetId === preset.id
-                    ? "获取中…"
-                    : "获取模型列表"}
-                </button>
-                <span className="muted small">
-                  已拉取 {(preset.fetchedModelIds ?? []).length} · 手动{" "}
-                  {(preset.manualModelIds ?? []).length} · 合计可选{" "}
-                  {(mergedModelsByPreset[preset.id] ?? []).length}
-                </span>
-              </div>
-            </div>
-            <div className="field field--fixed-120">
-              <label htmlFor={`${fid}-preset-concurrency-${preset.id}`}>
-                并发上限
-              </label>
-              <input
-                id={`${fid}-preset-concurrency-${preset.id}`}
-                type="number"
-                min={1}
-                max={64}
-                value={preset.concurrency}
-                onChange={(e) =>
-                  updatePreset(idx, {
-                    ...preset,
-                    concurrency: Math.max(1, Number(e.target.value) || 1),
-                  })
-                }
-              />
-            </div>
-            {settings.apiPresets.length > 1 && (
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() =>
-                  setDeleteConfirm({
-                    kind: "apiPreset",
-                    id: preset.id,
-                    label: preset.name,
-                  })
-                }
+            <div className="settings-config-box">
+              <div
+                className="settings-config-box__list"
+                role="listbox"
+                aria-label="API 预设列表"
               >
-                删除预设
-              </button>
-            )}
-          </div>
-          <div className="row manual-model-row">
-            <div className="field flex-grow">
-              <label htmlFor={`${fid}-preset-manual-${preset.id}`}>
-                手动添加模型 ID（保存进该预设列表）
-              </label>
-              <div className="model-select-row">
-                <input
-                  id={`${fid}-preset-manual-${preset.id}`}
-                  value={manualDraftByPreset[preset.id] ?? ""}
-                  onChange={(e) =>
-                    setManualDraftByPreset((d) => ({
-                      ...d,
-                      [preset.id]: e.target.value,
-                    }))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addManualModelId(idx);
+                {settings.apiPresets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selectedApiPresetId === preset.id}
+                    className={
+                      selectedApiPresetId === preset.id
+                        ? "settings-config-box__item settings-config-box__item--active"
+                        : "settings-config-box__item"
                     }
-                  }}
-                  placeholder="例如 my-vendor-model-001"
-                />
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  onClick={() => addManualModelId(idx)}
-                >
-                  加入列表
+                    onClick={() => setSelectedApiPresetId(preset.id)}
+                  >
+                    <span className="settings-config-box__item-label">
+                      {preset.name.trim() ? preset.name : "未命名预设"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="settings-config-box__add-row">
+                <button type="button" className="btn-ghost" onClick={addPreset}>
+                  + 添加 API 预设
                 </button>
               </div>
+              {selectedApiPreset && selectedApiIdx >= 0 ? (
+                <div className="settings-config-box__detail">
+                  <div className="settings-preset settings-preset--single">
+                    <div className="row">
+                      <div className="field">
+                        <label htmlFor={`${fid}-preset-name-${selectedApiPreset.id}`}>
+                          预设名称
+                        </label>
+                        <input
+                          id={`${fid}-preset-name-${selectedApiPreset.id}`}
+                          value={selectedApiPreset.name}
+                          onChange={(e) =>
+                            updatePreset(selectedApiIdx, {
+                              ...selectedApiPreset,
+                              name: e.target.value,
+                            })
+                          }
+                          placeholder="例如：OpenAI 官方"
+                        />
+                      </div>
+                      <div className="field flex-grow">
+                        <label htmlFor={`${fid}-preset-base-${selectedApiPreset.id}`}>
+                          Base URL（OpenAI 兼容）
+                        </label>
+                        <input
+                          id={`${fid}-preset-base-${selectedApiPreset.id}`}
+                          value={selectedApiPreset.baseUrl}
+                          onChange={(e) =>
+                            updatePreset(selectedApiIdx, {
+                              ...selectedApiPreset,
+                              baseUrl: e.target.value,
+                            })
+                          }
+                          placeholder="https://api.openai.com"
+                        />
+                      </div>
+                    </div>
+                    <div className="row">
+                      <div className="field flex-grow">
+                        <label htmlFor={`${fid}-preset-key-${selectedApiPreset.id}`}>
+                          API Key
+                        </label>
+                        <input
+                          id={`${fid}-preset-key-${selectedApiPreset.id}`}
+                          type="password"
+                          autoComplete="off"
+                          value={selectedApiPreset.apiKey}
+                          onChange={(e) =>
+                            updatePreset(selectedApiIdx, {
+                              ...selectedApiPreset,
+                              apiKey: e.target.value,
+                            })
+                          }
+                          placeholder="sk-..."
+                        />
+                      </div>
+                      <div className="field preset-actions">
+                        <label htmlFor={`${fid}-preset-fetch-${selectedApiPreset.id}`}>
+                          模型列表
+                        </label>
+                        <div className="preset-actions-inner">
+                          <button
+                            id={`${fid}-preset-fetch-${selectedApiPreset.id}`}
+                            type="button"
+                            className="btn-primary"
+                            disabled={fetchingPresetId === selectedApiPreset.id}
+                            onClick={() => fetchForPreset(selectedApiPreset.id)}
+                          >
+                            {fetchingPresetId === selectedApiPreset.id
+                              ? "获取中…"
+                              : "获取模型列表"}
+                          </button>
+                          <span className="muted small">
+                            已拉取{" "}
+                            {(selectedApiPreset.fetchedModelIds ?? []).length} ·
+                            手动 {(selectedApiPreset.manualModelIds ?? []).length}{" "}
+                            · 合计可选{" "}
+                            {
+                              (mergedModelsByPreset[selectedApiPreset.id] ?? [])
+                                .length
+                            }
+                          </span>
+                        </div>
+                      </div>
+                      <div className="field field--fixed-120">
+                        <label
+                          htmlFor={`${fid}-preset-concurrency-${selectedApiPreset.id}`}
+                        >
+                          并发上限
+                        </label>
+                        <input
+                          id={`${fid}-preset-concurrency-${selectedApiPreset.id}`}
+                          type="number"
+                          min={1}
+                          max={64}
+                          value={selectedApiPreset.concurrency}
+                          onChange={(e) =>
+                            updatePreset(selectedApiIdx, {
+                              ...selectedApiPreset,
+                              concurrency: Math.max(
+                                1,
+                                Number(e.target.value) || 1,
+                              ),
+                            })
+                          }
+                        />
+                      </div>
+                      {settings.apiPresets.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          onClick={() =>
+                            setDeleteConfirm({
+                              kind: "apiPreset",
+                              id: selectedApiPreset.id,
+                              label: selectedApiPreset.name,
+                            })
+                          }
+                        >
+                          删除预设
+                        </button>
+                      )}
+                    </div>
+                    <div className="row manual-model-row">
+                      <div className="field flex-grow">
+                        <label
+                          htmlFor={`${fid}-preset-manual-${selectedApiPreset.id}`}
+                        >
+                          手动添加模型 ID（保存进该预设列表）
+                        </label>
+                        <div className="model-select-row">
+                          <input
+                            id={`${fid}-preset-manual-${selectedApiPreset.id}`}
+                            value={
+                              manualDraftByPreset[selectedApiPreset.id] ?? ""
+                            }
+                            onChange={(e) =>
+                              setManualDraftByPreset((d) => ({
+                                ...d,
+                                [selectedApiPreset.id]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                addManualModelId(selectedApiIdx);
+                              }
+                            }}
+                            placeholder="例如 my-vendor-model-001"
+                          />
+                          <button
+                            type="button"
+                            className="btn-ghost btn-sm"
+                            onClick={() => addManualModelId(selectedApiIdx)}
+                          >
+                            加入列表
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    {(mergedModelsByPreset[selectedApiPreset.id] ?? []).length >
+                      0 && (
+                      <ul className="manual-model-tags">
+                        {(
+                          mergedModelsByPreset[selectedApiPreset.id] ?? []
+                        ).map((mid) => (
+                          <li key={mid}>
+                            <code>{mid}</code>
+                            <button
+                              type="button"
+                              className="btn-tag-remove"
+                              title="从该预设可选列表中移除"
+                              onClick={() =>
+                                removePresetModelId(selectedApiIdx, mid)
+                              }
+                            >
+                              ×
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          </div>
-          {(mergedModelsByPreset[preset.id] ?? []).length > 0 && (
-            <ul className="manual-model-tags">
-              {(mergedModelsByPreset[preset.id] ?? []).map((mid) => (
-                <li key={mid}>
-                  <code>{mid}</code>
-                  <button
-                    type="button"
-                    className="btn-tag-remove"
-                    title="从该预设可选列表中移除"
-                    onClick={() => removePresetModelId(idx, mid)}
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ))}
-            <button type="button" className="btn-ghost" onClick={addPreset}>
-              + 添加 API 预设
-            </button>
 
             <h3 className="settings-section-title">参赛模型</h3>
             {settings.models.map((m, idx) => (
@@ -647,123 +735,186 @@ export function SettingsPanel({ settings, onChange }: Props) {
 
           <div className="settings-col">
             <h3 className="settings-section-title">Judge 列表</h3>
-            {settings.judges.map((j, idx) => (
-              <div key={j.id} className="settings-stack-item">
-          <div className="row">
-            <div className="field">
-              <label htmlFor={`${fid}-judge-name-${j.id}`}>名称</label>
-              <input
-                id={`${fid}-judge-name-${j.id}`}
-                value={j.name}
-                onChange={(e) => {
-                  const next = [...settings.judges];
-                  next[idx] = { ...j, name: e.target.value };
-                  setJudges(next);
-                }}
-              />
-            </div>
-            <button
-              type="button"
-              className="btn-ghost align-self-end"
-              onClick={() =>
-                setDeleteConfirm({
-                  kind: "judge",
-                  id: j.id,
-                  label: j.name,
-                })
-              }
-            >
-              删除
-            </button>
-          </div>
-          <div className="row align-stretch">
-            <div className="field-grow">
-              <ModelPresetPicker
-                presets={settings.apiPresets}
-                presetId={j.presetId}
-                modelId={j.model}
-                modelsByPreset={mergedModelsByPreset}
-                onPresetChange={(presetId) => {
-                  const next = [...settings.judges];
-                  next[idx] = { ...j, presetId };
-                  setJudges(next);
-                }}
-                onModelChange={(model) => {
-                  const next = [...settings.judges];
-                  next[idx] = { ...j, model };
-                  setJudges(next);
-                }}
-                onRefreshModels={() => fetchForPreset(j.presetId)}
-                refreshPending={fetchingPresetId === j.presetId}
-              />
-            </div>
-            <div className="field field--fixed-100">
-              <label htmlFor={`${fid}-judge-review-${j.id}`}>review 次数</label>
-              <input
-                id={`${fid}-judge-review-${j.id}`}
-                type="number"
-                min={1}
-                max={20}
-                value={j.reviewCount}
-                onChange={(e) => {
-                  const next = [...settings.judges];
-                  next[idx] = {
-                    ...j,
-                    reviewCount: Math.max(1, Number(e.target.value) || 1),
-                  };
-                  setJudges(next);
-                }}
-              />
-            </div>
-          </div>
-          <div className="field">
-            <label htmlFor={`${fid}-judge-sys-${j.id}`}>system</label>
-            <textarea
-              id={`${fid}-judge-sys-${j.id}`}
-              value={j.systemPrompt}
-              onChange={(e) => {
-                const next = [...settings.judges];
-                next[idx] = { ...j, systemPrompt: e.target.value };
-                setJudges(next);
-              }}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={`${fid}-judge-user-${j.id}`}>
-              user 模板（{"{{candidate}}"} 为模型对该题的候选回答）
-            </label>
-            <textarea
-              id={`${fid}-judge-user-${j.id}`}
-              value={j.userPromptTemplate}
-              onChange={(e) => {
-                const next = [...settings.judges];
-                next[idx] = { ...j, userPromptTemplate: e.target.value };
-                setJudges(next);
-              }}
-            />
-          </div>
+            <div className="settings-config-box">
+              <div
+                className="settings-config-box__list"
+                role="listbox"
+                aria-label="Judge 列表"
+              >
+                {settings.judges.map((j) => (
+                  <button
+                    key={j.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selectedJudgeId === j.id}
+                    className={
+                      selectedJudgeId === j.id
+                        ? "settings-config-box__item settings-config-box__item--active"
+                        : "settings-config-box__item"
+                    }
+                    onClick={() => setSelectedJudgeId(j.id)}
+                  >
+                    <span className="settings-config-box__item-label">
+                      {j.name.trim() ? j.name : "未命名评委"}
+                    </span>
+                  </button>
+                ))}
               </div>
-            ))}
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() =>
-                setJudges([
-                  ...settings.judges,
-                  {
-                    id: newId(),
-                    name: "新评委",
-                    presetId: firstPresetId,
-                    model: "",
-                    systemPrompt: POETRY_JUDGE_SYSTEM,
-                    userPromptTemplate: POETRY_JUDGE_USER,
-                    reviewCount: 1,
-                  },
-                ])
-              }
-            >
-              + 添加 Judge
-            </button>
+              <div className="settings-config-box__add-row">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => {
+                    const jp =
+                      getDefaultJudgePromptTemplatesForSettings(settings);
+                    const id = newId();
+                    setJudges([
+                      ...settings.judges,
+                      {
+                        id,
+                        name: "新评委",
+                        presetId: firstPresetId,
+                        model: "",
+                        systemPrompt: jp.systemPrompt,
+                        userPromptTemplate: jp.userPromptTemplate,
+                        reviewCount: 1,
+                      },
+                    ]);
+                    setSelectedJudgeId(id);
+                  }}
+                >
+                  + 添加 Judge
+                </button>
+              </div>
+              {selectedJudge && selectedJudgeIdx >= 0 ? (
+                <div className="settings-config-box__detail">
+                  <div className="settings-stack-item settings-stack-item--single">
+                    <div className="row">
+                      <div className="field">
+                        <label
+                          htmlFor={`${fid}-judge-name-${selectedJudge.id}`}
+                        >
+                          名称
+                        </label>
+                        <input
+                          id={`${fid}-judge-name-${selectedJudge.id}`}
+                          value={selectedJudge.name}
+                          onChange={(e) => {
+                            const next = [...settings.judges];
+                            next[selectedJudgeIdx] = {
+                              ...selectedJudge,
+                              name: e.target.value,
+                            };
+                            setJudges(next);
+                          }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-ghost align-self-end"
+                        onClick={() =>
+                          setDeleteConfirm({
+                            kind: "judge",
+                            id: selectedJudge.id,
+                            label: selectedJudge.name,
+                          })
+                        }
+                      >
+                        删除
+                      </button>
+                    </div>
+                    <div className="row align-stretch">
+                      <div className="field-grow">
+                        <ModelPresetPicker
+                          presets={settings.apiPresets}
+                          presetId={selectedJudge.presetId}
+                          modelId={selectedJudge.model}
+                          modelsByPreset={mergedModelsByPreset}
+                          onPresetChange={(presetId) => {
+                            const next = [...settings.judges];
+                            next[selectedJudgeIdx] = {
+                              ...selectedJudge,
+                              presetId,
+                            };
+                            setJudges(next);
+                          }}
+                          onModelChange={(model) => {
+                            const next = [...settings.judges];
+                            next[selectedJudgeIdx] = { ...selectedJudge, model };
+                            setJudges(next);
+                          }}
+                          onRefreshModels={() =>
+                            fetchForPreset(selectedJudge.presetId)
+                          }
+                          refreshPending={
+                            fetchingPresetId === selectedJudge.presetId
+                          }
+                        />
+                      </div>
+                      <div className="field field--fixed-100">
+                        <label
+                          htmlFor={`${fid}-judge-review-${selectedJudge.id}`}
+                        >
+                          review 次数
+                        </label>
+                        <input
+                          id={`${fid}-judge-review-${selectedJudge.id}`}
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={selectedJudge.reviewCount}
+                          onChange={(e) => {
+                            const next = [...settings.judges];
+                            next[selectedJudgeIdx] = {
+                              ...selectedJudge,
+                              reviewCount: Math.max(
+                                1,
+                                Number(e.target.value) || 1,
+                              ),
+                            };
+                            setJudges(next);
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`${fid}-judge-sys-${selectedJudge.id}`}>
+                        system
+                      </label>
+                      <textarea
+                        id={`${fid}-judge-sys-${selectedJudge.id}`}
+                        value={selectedJudge.systemPrompt}
+                        onChange={(e) => {
+                          const next = [...settings.judges];
+                          next[selectedJudgeIdx] = {
+                            ...selectedJudge,
+                            systemPrompt: e.target.value,
+                          };
+                          setJudges(next);
+                        }}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`${fid}-judge-user-${selectedJudge.id}`}>
+                        user 模板（{"{{candidate}}"} 为模型对该题的候选回答）
+                      </label>
+                      <textarea
+                        id={`${fid}-judge-user-${selectedJudge.id}`}
+                        value={selectedJudge.userPromptTemplate}
+                        onChange={(e) => {
+                          const next = [...settings.judges];
+                          next[selectedJudgeIdx] = {
+                            ...selectedJudge,
+                            userPromptTemplate: e.target.value,
+                          };
+                          setJudges(next);
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
 
             <h3 className="settings-section-title">汇总模型</h3>
             <div className="field field--switch">

@@ -331,6 +331,57 @@ export function getEvaluationThemeLabel(
   return "诗歌评测";
 }
 
+/** 与切换命题时写入各 Judge 的家族默认模板一致 */
+export function getJudgePromptTemplatesForPresetDefinition(
+  def: EvaluationPresetDefinition,
+): { systemPrompt: string; userPromptTemplate: string } {
+  if (def.family === "custom") {
+    return { systemPrompt: "", userPromptTemplate: "" };
+  }
+  if (def.family === "algorithm") {
+    return {
+      systemPrompt: ALGORITHM_JUDGE_SYSTEM,
+      userPromptTemplate: ALGORITHM_JUDGE_USER,
+    };
+  }
+  if (def.family === "math") {
+    return {
+      systemPrompt: MATH_JUDGE_SYSTEM,
+      userPromptTemplate: MATH_JUDGE_USER,
+    };
+  }
+  if (def.family === "llm_systems") {
+    return {
+      systemPrompt: LLM_SYSTEMS_JUDGE_SYSTEM,
+      userPromptTemplate: LLM_SYSTEMS_JUDGE_USER,
+    };
+  }
+  if (def.family === "themed_prose") {
+    return {
+      systemPrompt: PROSE_JUDGE_SYSTEM,
+      userPromptTemplate: PROSE_JUDGE_USER,
+    };
+  }
+  return {
+    systemPrompt: POETRY_JUDGE_SYSTEM,
+    userPromptTemplate: POETRY_JUDGE_USER,
+  };
+}
+
+/** 当前命题对应的评委默认 system/user（用于新增 Judge 等） */
+export function getDefaultJudgePromptTemplatesForSettings(
+  settings: GlobalSettings,
+): { systemPrompt: string; userPromptTemplate: string } {
+  const def = getEvaluationPresetById(
+    settings.evaluationPresetId,
+    customEvaluationPresetsSafe(settings),
+  );
+  if (!def) {
+    return { systemPrompt: "", userPromptTemplate: "" };
+  }
+  return getJudgePromptTemplatesForPresetDefinition(def);
+}
+
 /**
  * 切换命题预设：更新题目；内置题同步各 Judge 的家族默认模板；自定义题清空评委模板。
  * 汇总模型的 system/user 始终保留当前已填内容，不随预设切换覆盖。
@@ -344,29 +395,8 @@ export function applyEvaluationPreset(
   if (!def) {
     return { ...settings, customEvaluationPresets: customList };
   }
-  const isCustom = def.family === "custom";
-  const judgeSystem = isCustom
-    ? ""
-    : def.family === "algorithm"
-      ? ALGORITHM_JUDGE_SYSTEM
-      : def.family === "math"
-        ? MATH_JUDGE_SYSTEM
-        : def.family === "llm_systems"
-          ? LLM_SYSTEMS_JUDGE_SYSTEM
-          : def.family === "themed_prose"
-            ? PROSE_JUDGE_SYSTEM
-            : POETRY_JUDGE_SYSTEM;
-  const judgeUser = isCustom
-    ? ""
-    : def.family === "algorithm"
-      ? ALGORITHM_JUDGE_USER
-      : def.family === "math"
-        ? MATH_JUDGE_USER
-        : def.family === "llm_systems"
-          ? LLM_SYSTEMS_JUDGE_USER
-          : def.family === "themed_prose"
-            ? PROSE_JUDGE_USER
-            : POETRY_JUDGE_USER;
+  const { systemPrompt: judgeSystem, userPromptTemplate: judgeUser } =
+    getJudgePromptTemplatesForPresetDefinition(def);
   const judges = settings.judges.map((j) => ({
     ...j,
     systemPrompt: judgeSystem,

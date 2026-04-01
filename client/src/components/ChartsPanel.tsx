@@ -10,11 +10,30 @@ import {
   YAxis,
 } from "recharts";
 import { averageAutoScoreByModel, uniqueModelIds } from "../chartUtils";
+import {
+  downloadBundleJson,
+  downloadSnapshotJson,
+} from "../scoreApi";
+import {
+  formatTimestampForFilename,
+  sanitizeFilenameBase,
+} from "../scoreSnapshot";
 import type {
   BlendWeights,
   GenerationResult,
+  SavedScoreSnapshot,
+  ScoreHistoryExportFile,
   ThreadScoreInput,
 } from "../types";
+
+export interface ChartsHistoryPanelProps {
+  entries: SavedScoreSnapshot[];
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}
 
 interface Props {
   generations: GenerationResult[];
@@ -23,6 +42,15 @@ interface Props {
   threadScores: Record<string, ThreadScoreInput | undefined>;
   blendWeights: BlendWeights;
   judgeIds: string[];
+  /** 查看历史快照时为 true，不写入 store */
+  readOnly?: boolean;
+  historyPanel?: ChartsHistoryPanelProps | null;
+}
+
+function promptSnippet(prompt: string, max = 48): string {
+  const t = prompt.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}…`;
 }
 
 export function ChartsPanel({
@@ -32,6 +60,8 @@ export function ChartsPanel({
   threadScores,
   blendWeights,
   judgeIds,
+  readOnly = false,
+  historyPanel,
 }: Props) {
   const modelIds = uniqueModelIds(generations);
   const autoMap = averageAutoScoreByModel(
@@ -59,6 +89,136 @@ export function ChartsPanel({
   return (
     <div className="panel">
       <h2>人工分与图表</h2>
+
+      {historyPanel ? (
+        <div className="charts-history">
+          <div className="charts-history__head">
+            <h3 className="charts-history__title">历史成绩</h3>
+            <div className="charts-history__actions">
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                disabled={historyPanel.loading}
+                onClick={() => historyPanel.onRetry()}
+              >
+                刷新
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                disabled={
+                  !historyPanel.selectedId ||
+                  historyPanel.loading ||
+                  !!historyPanel.error
+                }
+                onClick={() => {
+                  const id = historyPanel.selectedId;
+                  if (!id) return;
+                  const e = historyPanel.entries.find((x) => x.id === id);
+                  if (!e) return;
+                  downloadSnapshotJson(
+                    e,
+                    `${sanitizeFilenameBase(e.prompt, 60)}_${formatTimestampForFilename()}.json`,
+                  );
+                }}
+              >
+                下载数据
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                disabled={
+                  historyPanel.entries.length === 0 ||
+                  historyPanel.loading ||
+                  !!historyPanel.error
+                }
+                onClick={() => {
+                  const bundle: ScoreHistoryExportFile = {
+                    exportBundleVersion: 1,
+                    exportedAt: Date.now(),
+                    entries: historyPanel.entries,
+                  };
+                  downloadBundleJson(
+                    bundle,
+                    `score-history-all_${formatTimestampForFilename()}.json`,
+                  );
+                }}
+              >
+                下载全部数据
+              </button>
+              {historyPanel.selectedId ? (
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() => historyPanel.onSelect(null)}
+                >
+                  查看当前会话
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {historyPanel.loading ? (
+            <p className="muted charts-history__status">正在从本地 data/scores 加载…</p>
+          ) : null}
+          {historyPanel.error ? (
+            <p className="warn charts-history__status" role="alert">
+              {historyPanel.error}{" "}
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => historyPanel.onRetry()}
+              >
+                重试
+              </button>
+            </p>
+          ) : null}
+          {!historyPanel.loading &&
+          !historyPanel.error &&
+          historyPanel.entries.length === 0 ? (
+            <p className="muted charts-history__status">
+              暂无保存的成绩。请在「运行与结果」评测完成后点击「保存成绩」（需本地代理已连接）。
+            </p>
+          ) : null}
+          {!historyPanel.loading && !historyPanel.error && historyPanel.entries.length > 0 ? (
+            <ul className="charts-history__list" role="list">
+              {historyPanel.entries.map((e) => {
+                const sel = historyPanel.selectedId === e.id;
+                const label = new Date(e.savedAt).toLocaleString(undefined, {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                });
+                return (
+                  <li key={e.id}>
+                    <button
+                      type="button"
+                      className={
+                        sel
+                          ? "charts-history__item charts-history__item--selected"
+                          : "charts-history__item"
+                      }
+                      onClick={() =>
+                        historyPanel.onSelect(sel ? null : e.id)
+                      }
+                    >
+                      <span className="charts-history__time">{label}</span>
+                      <span className="charts-history__prompt" title={e.prompt}>
+                        {promptSnippet(e.prompt)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      {readOnly ? (
+        <p className="charts-banner charts-banner--readonly" role="status">
+          正在查看历史记录，不会修改当前运行会话。
+        </p>
+      ) : null}
+
       <p className="muted">
         此处按<strong>模型</strong>填一条<strong>整体验收</strong>人工分（0–10），用于与下方「自动汇总」柱状图对比。
       </p>
@@ -67,7 +227,11 @@ export function ChartsPanel({
       </p>
 
       {!hasAny && (
-        <p className="muted">还没有可对比的生成结果。请先到「运行与结果」完成一次评测。</p>
+        <p className="muted">
+          {readOnly
+            ? "该条历史记录没有可展示的生成结果。"
+            : "还没有可对比的生成结果。请先到「运行与结果」完成一次评测。"}
+        </p>
       )}
 
       {hasAny && (
@@ -93,8 +257,13 @@ export function ChartsPanel({
                         min={0}
                         max={10}
                         step={0.5}
+                        readOnly={readOnly}
                         aria-label={`整体验收人工分（0–10），模型：${r.modelId}`}
-                        className="charts-panel__human-input"
+                        className={
+                          readOnly
+                            ? "charts-panel__human-input charts-panel__human-input--readonly"
+                            : "charts-panel__human-input"
+                        }
                         value={
                           r.human !== undefined && !Number.isNaN(r.human)
                             ? String(r.human)
@@ -102,6 +271,7 @@ export function ChartsPanel({
                         }
                         placeholder="0–10"
                         onChange={(e) => {
+                          if (readOnly) return;
                           const raw = e.target.value.trim();
                           if (raw === "") {
                             onHumanChange(r.modelId, undefined);

@@ -8,8 +8,14 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
 } from "react";
+import { toPng } from "html-to-image";
 import { clampScore10 } from "../errorUtils";
+import {
+  formatTimestampForFilename,
+  sanitizeFilenameBase,
+} from "../scoreSnapshot";
 import type {
   GenerationResult,
   GlobalSettings,
@@ -50,6 +56,9 @@ const THREAD_GRID_COL_MAX = 600;
 /** 宽屏：每行最多线程树数量，窄屏由 canvasGridLayoutForWidth 减小 */
 const THREADS_PER_ROW_MAX = 4;
 const THREAD_GRID_GAP_PX = 48;
+/** 与 App.css `--run-canvas-inside-pad-x` 一致 */
+const RUN_CANVAS_PAD_X_PX = 56;
+const THREAD_COL_ABS_MAX_PX = 1200;
 
 type CanvasGridLayout = {
   threadsPerRow: number;
@@ -112,6 +121,63 @@ function useCanvasGridLayout(): CanvasGridLayout {
  * 与 App.css `--judge-column-width` 的像素数值一致（用于布局公式）。
  */
 const JUDGE_COL_WIDTH_PX = 260;
+
+function neededThreadMinWidthPx(judgeCount: number): number {
+  if (judgeCount <= 1) return 0;
+  return (
+    36 +
+    JUDGE_COL_WIDTH_PX * judgeCount +
+    20 * Math.max(0, judgeCount - 1)
+  );
+}
+
+function computeEffectiveGap(
+  viewportWidth: number,
+  threadsPerRow: number,
+  colMinEff: number,
+  gapMin: number,
+  gapMax: number,
+): number {
+  if (threadsPerRow <= 1) return gapMin;
+  const available = Math.max(0, viewportWidth - 2 * RUN_CANVAS_PAD_X_PX);
+  const minRow = threadsPerRow * colMinEff + (threadsPerRow - 1) * gapMin;
+  if (available <= minRow) return Math.max(12, Math.floor(gapMin * 0.75));
+  const slack = (available - threadsPerRow * colMinEff) / (threadsPerRow - 1);
+  return Math.round(Math.min(gapMax, Math.max(gapMin, slack)));
+}
+
+function RunCardStreamBadge({
+  sessionRunning,
+  streaming,
+  failed,
+  paused,
+}: {
+  sessionRunning: boolean;
+  streaming: boolean;
+  failed: boolean;
+  paused?: boolean;
+}) {
+  const label = failed
+    ? "失败"
+    : paused
+      ? "已暂停"
+      : streaming && sessionRunning
+        ? "生成中"
+        : "已完成";
+  const cls = [
+    "run-canvas-card__stream-status",
+    failed && "run-canvas-card__stream-status--fail",
+    paused && "run-canvas-card__stream-status--paused",
+    streaming &&
+      sessionRunning &&
+      !failed &&
+      !paused &&
+      "run-canvas-card__stream-status--live",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return <span className={cls}>{label}</span>;
+}
 
 const CANVAS_SCALE_MIN = 0.25;
 const CANVAS_SCALE_MAX = 2.5;
@@ -441,6 +507,15 @@ interface RunCanvasProps {
     score: number | undefined,
   ) => void;
   setThreadHumanScore: (genId: string, score: number | undefined) => void;
+  onRetryThread: (genId: string) => void;
+  onAbandonThread: (genId: string) => void;
+  onPauseThread: (genId: string) => void;
+  onAbortJudgeSlot: (
+    genId: string,
+    judgeId: string,
+    reviewIndex: number,
+  ) => void;
+  onCancelThread: (genId: string) => void;
 }
 
 export function RunCanvas({
@@ -449,6 +524,11 @@ export function RunCanvas({
   threadScores,
   setThreadJudgeScore,
   setThreadHumanScore,
+  onRetryThread,
+  onAbandonThread,
+  onPauseThread,
+  onAbortJudgeSlot,
+  onCancelThread,
 }: RunCanvasProps) {
   const [pan, setPan] = useState({ x: 80, y: 48 });
   const [scale, setScale] = useState(1);
@@ -461,8 +541,10 @@ export function RunCanvas({
     py: number;
   } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   const panRef = useRef(pan);
   const scaleRef = useRef(scale);
+  const [exportingPng, setExportingPng] = useState(false);
 
   const judgeSlots = useMemo(
     () => judgeSlotsFromSettings(settings),
@@ -471,10 +553,40 @@ export function RunCanvas({
 
   const gridLayout = useCanvasGridLayout();
 
+  const [viewportWidth, setViewportWidth] = useState(1280);
+
+  const canvasGridMetrics = useMemo(() => {
+    const jc = settings.judges.length;
+    const neededMin = neededThreadMinWidthPx(jc);
+    const colMinEff = Math.max(gridLayout.colMin, neededMin);
+    const colMaxEff = Math.min(
+      THREAD_COL_ABS_MAX_PX,
+      Math.max(gridLayout.colMax, colMinEff),
+    );
+    const gapMax = Math.max(gridLayout.gap + 32, 48);
+    const effectiveGap = computeEffectiveGap(
+      viewportWidth,
+      gridLayout.threadsPerRow,
+      colMinEff,
+      gridLayout.gap,
+      gapMax,
+    );
+    return { colMinEff, colMaxEff, effectiveGap };
+  }, [gridLayout, viewportWidth, settings.judges.length]);
+
   const sessionId = session?.id;
   useEffect(() => {
     setPan({ ...CANVAS_DEFAULT_PAN });
     setScale(1);
+  }, [sessionId]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setViewportWidth(el.clientWidth));
+    ro.observe(el);
+    setViewportWidth(el.clientWidth);
+    return () => ro.disconnect();
   }, [sessionId]);
 
   useEffect(() => {
@@ -484,6 +596,74 @@ export function RunCanvas({
   useEffect(() => {
     scaleRef.current = scale;
   }, [scale]);
+
+  const zoomAtViewportCenter = useCallback((nextScale: number) => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vx = rect.width / 2;
+    const vy = rect.height / 2;
+    const p = panRef.current;
+    const s = scaleRef.current;
+    const clamped = Math.min(
+      CANVAS_SCALE_MAX,
+      Math.max(CANVAS_SCALE_MIN, nextScale),
+    );
+    if (Math.abs(clamped - s) < 1e-6) return;
+    const cx = (vx - p.x) / s;
+    const cy = (vy - p.y) / s;
+    setPan({ x: vx - cx * clamped, y: vy - cy * clamped });
+    setScale(clamped);
+  }, []);
+
+  const zoomIn = useCallback(() => {
+    zoomAtViewportCenter(scaleRef.current * CANVAS_ZOOM_KEY_FACTOR);
+  }, [zoomAtViewportCenter]);
+
+  const zoomOut = useCallback(() => {
+    zoomAtViewportCenter(scaleRef.current / CANVAS_ZOOM_KEY_FACTOR);
+  }, [zoomAtViewportCenter]);
+
+  const exportCanvasPng = useCallback(async () => {
+    const grid = gridRef.current;
+    if (!grid || !session) return;
+    setExportingPng(true);
+    const pad = 36;
+    const gw = grid.scrollWidth;
+    const gh = grid.scrollHeight;
+    const w = gw + pad * 2;
+    const h = gh + pad * 2;
+    const wrap = document.createElement("div");
+    wrap.style.boxSizing = "border-box";
+    wrap.style.width = `${w}px`;
+    wrap.style.height = `${h}px`;
+    wrap.style.padding = `${pad}px`;
+    const canvasHost = grid.closest(".run-canvas");
+    const bg =
+      canvasHost instanceof HTMLElement
+        ? getComputedStyle(canvasHost).backgroundColor
+        : "";
+    wrap.style.backgroundColor =
+      bg && bg !== "rgba(0, 0, 0, 0)" ? bg : "oklch(0.22 0.02 260)";
+    const clone = grid.cloneNode(true) as HTMLElement;
+    wrap.appendChild(clone);
+    document.body.appendChild(wrap);
+    try {
+      const dataUrl = await toPng(wrap, {
+        pixelRatio: 1,
+        width: w,
+        height: h,
+        cacheBust: true,
+      });
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `canvas-${sanitizeFilenameBase(session.prompt, 50)}_${formatTimestampForFilename()}.png`;
+      a.click();
+    } finally {
+      document.body.removeChild(wrap);
+      setExportingPng(false);
+    }
+  }, [session]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -517,23 +697,6 @@ export function RunCanvas({
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
-
-    const zoomAtViewportCenter = (nextScale: number) => {
-      const rect = el.getBoundingClientRect();
-      const vx = rect.width / 2;
-      const vy = rect.height / 2;
-      const p = panRef.current;
-      const s = scaleRef.current;
-      const clamped = Math.min(
-        CANVAS_SCALE_MAX,
-        Math.max(CANVAS_SCALE_MIN, nextScale),
-      );
-      if (Math.abs(clamped - s) < 1e-6) return;
-      const cx = (vx - p.x) / s;
-      const cy = (vy - p.y) / s;
-      setPan({ x: vx - cx * clamped, y: vy - cy * clamped });
-      setScale(clamped);
-    };
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (!el.contains(document.activeElement)) return;
@@ -572,7 +735,7 @@ export function RunCanvas({
 
     el.addEventListener("keydown", onKeyDown);
     return () => el.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [zoomAtViewportCenter]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -640,6 +803,36 @@ export function RunCanvas({
   return (
     <div className="run-canvas">
       <div className="run-canvas-toolbar">
+        <div className="run-canvas-toolbar__controls">
+          <button
+            type="button"
+            className="btn-ghost btn-sm run-canvas-toolbar__btn"
+            onClick={zoomOut}
+            aria-label="缩小画布"
+            title="缩小"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="btn-ghost btn-sm run-canvas-toolbar__btn"
+            onClick={zoomIn}
+            aria-label="放大画布"
+            title="放大"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="btn-ghost btn-sm run-canvas-toolbar__btn"
+            onClick={() => void exportCanvasPng()}
+            disabled={exportingPng}
+            aria-label="将线程画布导出为 PNG"
+            title="导出为 PNG（100% 布局尺寸，含边距）"
+          >
+            {exportingPng ? "导出中…" : "导出 PNG"}
+          </button>
+        </div>
         <span className="muted run-canvas-hint">
           空白处拖动平移画布 · 空白处滚轮缩放 · 卡片上 Ctrl/⌘+滚轮缩放 ·
           点击空白处后可使用键盘：方向键平移 · +/− 缩放 · 0 重置视图 ·
@@ -670,11 +863,15 @@ export function RunCanvas({
           }}
         >
           <div
+            ref={gridRef}
             className="run-canvas-grid"
-            style={{
-              gridTemplateColumns: `repeat(${gridLayout.threadsPerRow}, minmax(${gridLayout.colMin}px, ${gridLayout.colMax}px))`,
-              gap: `${gridLayout.gap}px`,
-            }}
+            style={
+              {
+                gridTemplateColumns: `repeat(${gridLayout.threadsPerRow}, minmax(${canvasGridMetrics.colMinEff}px, ${canvasGridMetrics.colMaxEff}px))`,
+                gap: `${canvasGridMetrics.effectiveGap}px`,
+                "--thread-column-max-width": `${canvasGridMetrics.colMaxEff}px`,
+              } as CSSProperties
+            }
           >
             {gens.map((g, gi) => (
               <ThreadColumn
@@ -686,9 +883,14 @@ export function RunCanvas({
                 aggregatorEnabled={settings.aggregator.enabled}
                 judges={settings.judges}
                 threadScores={threadScores}
-                gridColMax={gridLayout.colMax}
+                gridColMax={canvasGridMetrics.colMaxEff}
                 setThreadJudgeScore={setThreadJudgeScore}
                 setThreadHumanScore={setThreadHumanScore}
+                onRetryThread={onRetryThread}
+                onAbandonThread={onAbandonThread}
+                onPauseThread={onPauseThread}
+                onAbortJudgeSlot={onAbortJudgeSlot}
+                onCancelThread={onCancelThread}
               />
             ))}
           </div>
@@ -722,6 +924,15 @@ type ThreadColumnProps = {
     score: number | undefined,
   ) => void;
   setThreadHumanScore: (genId: string, score: number | undefined) => void;
+  onRetryThread: (genId: string) => void;
+  onAbandonThread: (genId: string) => void;
+  onPauseThread: (genId: string) => void;
+  onAbortJudgeSlot: (
+    genId: string,
+    judgeId: string,
+    reviewIndex: number,
+  ) => void;
+  onCancelThread: (genId: string) => void;
 };
 
 function threadColumnPropsEqual(
@@ -739,6 +950,11 @@ function threadColumnPropsEqual(
   if (prev.session.error !== next.session.error) return false;
   const id = prev.generation.id;
   if (prev.threadScores[id] !== next.threadScores[id]) return false;
+  if (prev.onRetryThread !== next.onRetryThread) return false;
+  if (prev.onAbandonThread !== next.onAbandonThread) return false;
+  if (prev.onPauseThread !== next.onPauseThread) return false;
+  if (prev.onAbortJudgeSlot !== next.onAbortJudgeSlot) return false;
+  if (prev.onCancelThread !== next.onCancelThread) return false;
   return true;
 }
 
@@ -753,9 +969,17 @@ function ThreadColumnInner({
   gridColMax,
   setThreadJudgeScore,
   setThreadHumanScore,
+  onRetryThread,
+  onAbandonThread,
+  onPauseThread,
+  onAbortJudgeSlot,
+  onCancelThread,
 }: ThreadColumnProps) {
   const frame = THREAD_FRAME[threadIndex % THREAD_FRAME.length];
-  const genStreamingDone = g.threadPhase !== "generating";
+  const pausedAtGen =
+    g.threadPhase === "paused" && g.pausedPipelineStep?.step === "gen";
+  const genStreamingDone =
+    g.threadPhase !== "generating" && !pausedAtGen;
 
   const judgesComplete =
     judgeSlots.length === 0 ||
@@ -763,19 +987,37 @@ function ThreadColumnInner({
 
   const sessionDone = session.phase === "done";
 
+  const failedAtAggregate =
+    g.threadOutcome === "error" && g.failedPipelineStep?.step === "aggregate";
+  const pausedAtAggregate =
+    g.threadPhase === "paused" && g.pausedPipelineStep?.step === "aggregate";
+
   const showSummaryCard =
     aggregatorEnabled &&
     judgesComplete &&
     (g.aggregateText.length > 0 ||
       isWaitingAggregate(g, aggregatorEnabled) ||
-      sessionDone);
+      sessionDone ||
+      failedAtAggregate ||
+      pausedAtAggregate);
 
   const summaryDone =
     !aggregatorEnabled || (g.aggregateText.trim().length > 0 && sessionDone);
-  const showScoreBar = sessionDone && summaryDone && judgesComplete;
+  const threadScorable =
+    g.threadOutcome !== "error" &&
+    g.threadOutcome !== "abandoned" &&
+    g.threadPhase !== "paused";
+  const showScoreBar =
+    sessionDone && summaryDone && judgesComplete && threadScorable;
 
   const tIn = threadScores[g.id];
   const running = session.phase === "running";
+
+  const threadPipelineActive =
+    running &&
+    (g.threadPhase === "generating" ||
+      g.threadPhase === "judging" ||
+      g.threadPhase === "aggregating");
 
   const treeRef = useRef<HTMLDivElement | null>(null);
   const genRef = useRef<HTMLDivElement | null>(null);
@@ -814,7 +1056,7 @@ function ThreadColumnInner({
     setEdgeLayoutTick((t) => t + 1);
   }, [g, session.phase]);
 
-  /** 多评委并列：理想宽度；不超过网格单列上限，超出部分由 .judge-columns 横向滚动 */
+  /** 多评委并列：理想宽度；不超过网格单列上限 */
   const threadMinWidthPx =
     judges.length > 1
       ? Math.min(
@@ -835,13 +1077,87 @@ function ThreadColumnInner({
           ...(threadMinWidthPx !== undefined
             ? { minWidth: `${threadMinWidthPx}px` }
             : {}),
-        } as React.CSSProperties
+        } as CSSProperties
       }
     >
-      <div className="thread-column__title">
-        线程 {threadIndex + 1} · {g.modelId}
-        <span className="thread-column__meta">样本 #{g.sampleIndex + 1}</span>
+      <div className="thread-column__title thread-column__title--with-toolbar">
+        <div className="thread-column__title-main">
+          <span className="thread-column__title-line">
+            线程 {threadIndex + 1} · {g.modelId}
+          </span>
+          <span className="thread-column__meta">样本 #{g.sampleIndex + 1}</span>
+        </div>
+        {running &&
+        (threadPipelineActive ||
+          g.threadPhase === "paused" ||
+          (g.threadOutcome === "error" && g.failedPipelineStep)) ? (
+          <div
+            className="thread-column__toolbar"
+            role="toolbar"
+            aria-label="本线程流水线控制"
+          >
+            {g.threadOutcome === "error" && g.failedPipelineStep ? (
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => onRetryThread(g.id)}
+              >
+                重试
+              </button>
+            ) : null}
+            {threadPipelineActive ? (
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => onPauseThread(g.id)}
+              >
+                暂停
+              </button>
+            ) : null}
+            {g.threadPhase === "paused" ? (
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => onRetryThread(g.id)}
+              >
+                恢复
+              </button>
+            ) : null}
+            {threadPipelineActive || g.threadPhase === "paused" ? (
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => onCancelThread(g.id)}
+              >
+                取消
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
+      {g.pipelineError && g.threadOutcome === "error" ? (
+        <div className="thread-column__thread-error" role="alert">
+          <p className="thread-column__thread-error-msg">{g.pipelineError}</p>
+          <div className="thread-column__thread-error-actions">
+            {g.failedPipelineStep ? (
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => onRetryThread(g.id)}
+              >
+                重试此线程
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => onAbandonThread(g.id)}
+            >
+              弃用线程（0 分）
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="thread-column__flow">
         <div className="thread-thread-tree" ref={treeRef}>
           <ThreadPipelineEdges
@@ -872,12 +1188,28 @@ function ThreadColumnInner({
             ) : null}
             <div ref={genRef} className="thread-thread-tree__anchor">
               <div className="run-canvas-card run-canvas-card--gen">
-                <div className="run-canvas-card__head">参赛生成</div>
+                <div className="run-canvas-card__head run-canvas-card__head--with-status">
+                  <span className="run-canvas-card__head-main">参赛生成</span>
+                  <RunCardStreamBadge
+                    sessionRunning={running}
+                    streaming={g.streamingCard?.kind === "gen"}
+                    paused={
+                      g.threadPhase === "paused" &&
+                      g.pausedPipelineStep?.step === "gen"
+                    }
+                    failed={
+                      g.threadOutcome === "error" &&
+                      g.failedPipelineStep?.step === "gen"
+                    }
+                  />
+                </div>
                 <pre className="run-canvas-card__body">
                   {g.text ||
                     (g.threadPhase === "generating" && running
                       ? "生成中…"
-                      : "—")}
+                      : g.threadPhase === "paused"
+                        ? "已暂停"
+                        : "—")}
                 </pre>
               </div>
             </div>
@@ -893,6 +1225,22 @@ function ThreadColumnInner({
                       <div className="judge-column__stack">
                         {Array.from({ length: rc }, (_, ri) => {
                           const jr = findJudgeRun(g, judge.id, ri);
+                          const slotStreaming =
+                            g.judgeStreamingSlots?.some(
+                              (s) =>
+                                s.judgeId === judge.id &&
+                                s.reviewIndex === ri,
+                            ) ?? false;
+                          const pausedAtJudgeSlot =
+                            g.threadPhase === "paused" &&
+                            g.pausedPipelineStep?.step === "judge" &&
+                            g.pausedPipelineStep.judgeId === judge.id &&
+                            g.pausedPipelineStep.reviewIndex === ri;
+                          const errorAtJudgeSlot =
+                            g.threadOutcome === "error" &&
+                            g.failedPipelineStep?.step === "judge" &&
+                            g.failedPipelineStep.judgeId === judge.id &&
+                            g.failedPipelineStep.reviewIndex === ri;
                           return (
                             <div
                               key={`${judge.id}-${ri}`}
@@ -925,11 +1273,49 @@ function ThreadColumnInner({
                                   } as React.CSSProperties
                                 }
                               >
-                                <div className="run-canvas-card__head">
-                                  Judge · {judge.name}
-                                  <span className="run-canvas-card__sub">
-                                    第 {ri + 1} 轮
+                                <div className="run-canvas-card__head run-canvas-card__head--with-status">
+                                  <span className="run-canvas-card__head-main">
+                                    Judge · {judge.name}
+                                    <span className="run-canvas-card__sub">
+                                      第 {ri + 1} 轮
+                                    </span>
                                   </span>
+                                  <div className="run-canvas-card__head-status-row">
+                                    <RunCardStreamBadge
+                                      sessionRunning={running}
+                                      streaming={slotStreaming}
+                                      paused={pausedAtJudgeSlot}
+                                      failed={errorAtJudgeSlot}
+                                    />
+                                    {threadPipelineActive &&
+                                    running &&
+                                    slotStreaming ? (
+                                      <button
+                                        type="button"
+                                        className="btn-ghost btn-sm"
+                                        title="中止本槽位请求（其它并行 Judge 继续）"
+                                        onClick={() =>
+                                          onAbortJudgeSlot(
+                                            g.id,
+                                            judge.id,
+                                            ri,
+                                          )
+                                        }
+                                      >
+                                        中断
+                                      </button>
+                                    ) : null}
+                                    {pausedAtJudgeSlot || errorAtJudgeSlot ? (
+                                      <button
+                                        type="button"
+                                        className="btn-primary btn-sm"
+                                        title="仅重试本 Judge 槽位"
+                                        onClick={() => onRetryThread(g.id)}
+                                      >
+                                        重试
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 </div>
                                 <pre className="run-canvas-card__body run-canvas-card__body--sm">
                                   {jr?.rawText ?? ""}
@@ -972,7 +1358,18 @@ function ThreadColumnInner({
                     } as React.CSSProperties
                   }
                 >
-                  <div className="run-canvas-card__head">汇总</div>
+                  <div className="run-canvas-card__head run-canvas-card__head--with-status">
+                    <span className="run-canvas-card__head-main">汇总</span>
+                    <RunCardStreamBadge
+                      sessionRunning={running}
+                      streaming={g.streamingCard?.kind === "aggregate"}
+                      paused={pausedAtAggregate}
+                      failed={
+                        g.threadOutcome === "error" &&
+                        g.failedPipelineStep?.step === "aggregate"
+                      }
+                    />
+                  </div>
                   <pre className="run-canvas-card__body">
                     {g.aggregateText || ""}
                   </pre>
