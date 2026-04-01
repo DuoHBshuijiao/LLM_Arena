@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { clampScore10 } from "../errorUtils";
 import type {
@@ -17,44 +18,116 @@ import type {
   ThreadScoreInput,
 } from "../types";
 
-/** 灰粉 + 玫瑰金：线程与评委框色，低饱和区分、避免荧光粉 */
+/** 与 App.css 中 `--run-frame-thread-*` token 一一对应 */
 const THREAD_FRAME = [
-  "#9a8790",
-  "#a89096",
-  "#b89a8f",
-  "#b5a399",
-  "#c4a090",
-  "#ad8892",
-  "#a89888",
-  "#c9a8a0",
-];
+  "var(--run-frame-thread-0)",
+  "var(--run-frame-thread-1)",
+  "var(--run-frame-thread-2)",
+  "var(--run-frame-thread-3)",
+  "var(--run-frame-thread-4)",
+  "var(--run-frame-thread-5)",
+  "var(--run-frame-thread-6)",
+  "var(--run-frame-thread-7)",
+] as const;
 
+/** 与 App.css 中 `--run-frame-judge-*` token 一一对应 */
 const JUDGE_FRAME = [
-  "#b8957a",
-  "#a89096",
-  "#9a8790",
-  "#c4a090",
-  "#ad8892",
-  "#b89a8f",
-  "#c9a574",
-  "#8b7278",
-];
+  "var(--run-frame-judge-0)",
+  "var(--run-frame-judge-1)",
+  "var(--run-frame-judge-2)",
+  "var(--run-frame-judge-3)",
+  "var(--run-frame-judge-4)",
+  "var(--run-frame-judge-5)",
+  "var(--run-frame-judge-6)",
+  "var(--run-frame-judge-7)",
+] as const;
 
-const SUMMARY_FRAME = "#735560";
+const SUMMARY_FRAME = "var(--run-frame-summary)";
 
-/** 线程网格单列：下限保证可读，上限与双评委并列所需宽度一致（见 threadMinWidthPx） */
+/** 线程网格单列：与 `--thread-column-max-width` 数值一致（px） */
 const THREAD_GRID_COL_MIN = 360;
 const THREAD_GRID_COL_MAX = 600;
-/** 无限画布：每行固定线程树数量，超过则自动换行 */
-const THREADS_PER_ROW = 4;
+/** 宽屏：每行最多线程树数量，窄屏由 canvasGridLayoutForWidth 减小 */
+const THREADS_PER_ROW_MAX = 4;
 const THREAD_GRID_GAP_PX = 48;
-/** 与 .judge-column 固定宽度一致，用于多评委时计算 thread-column 最小宽度 */
+
+type CanvasGridLayout = {
+  threadsPerRow: number;
+  colMin: number;
+  colMax: number;
+  gap: number;
+};
+
+function canvasGridLayoutForWidth(width: number): CanvasGridLayout {
+  if (width <= 520) {
+    return {
+      threadsPerRow: 1,
+      colMin: 256,
+      colMax: THREAD_GRID_COL_MAX,
+      gap: 20,
+    };
+  }
+  if (width <= 800) {
+    return {
+      threadsPerRow: 2,
+      colMin: 300,
+      colMax: THREAD_GRID_COL_MAX,
+      gap: 28,
+    };
+  }
+  if (width <= 1180) {
+    return {
+      threadsPerRow: 3,
+      colMin: 330,
+      colMax: THREAD_GRID_COL_MAX,
+      gap: 36,
+    };
+  }
+  return {
+    threadsPerRow: THREADS_PER_ROW_MAX,
+    colMin: THREAD_GRID_COL_MIN,
+    colMax: THREAD_GRID_COL_MAX,
+    gap: THREAD_GRID_GAP_PX,
+  };
+}
+
+function subscribeResize(cb: () => void) {
+  window.addEventListener("resize", cb);
+  return () => window.removeEventListener("resize", cb);
+}
+
+function getViewportWidthSnapshot() {
+  return window.innerWidth;
+}
+
+function useCanvasGridLayout(): CanvasGridLayout {
+  const width = useSyncExternalStore(
+    subscribeResize,
+    getViewportWidthSnapshot,
+    () => 1280,
+  );
+  return useMemo(() => canvasGridLayoutForWidth(width), [width]);
+}
+/**
+ * 与 App.css `--judge-column-width` 的像素数值一致（用于布局公式）。
+ */
 const JUDGE_COL_WIDTH_PX = 260;
 
 const CANVAS_SCALE_MIN = 0.25;
 const CANVAS_SCALE_MAX = 2.5;
+const CANVAS_PAN_KEYBOARD_PX = 48;
+const CANVAS_ZOOM_KEY_FACTOR = 1.12;
+const CANVAS_DEFAULT_PAN = { x: 80, y: 48 } as const;
 
 /** 滚轮缩放画布：空白处直接缩放；卡片/流式区域上需 Ctrl/⌘+滚轮（避免抢走卡片内纵向滚动）。 */
+function isCanvasKeyboardTargetInteractive(el: Element | null): boolean {
+  return Boolean(
+    el?.closest(
+      "button, a, input, textarea, select, summary, [contenteditable]",
+    ),
+  );
+}
+
 function isCanvasWheelZoomAllowed(
   e: WheelEvent,
   target: EventTarget | null,
@@ -396,9 +469,11 @@ export function RunCanvas({
     [settings],
   );
 
+  const gridLayout = useCanvasGridLayout();
+
   const sessionId = session?.id;
   useEffect(() => {
-    setPan({ x: 80, y: 48 });
+    setPan({ ...CANVAS_DEFAULT_PAN });
     setScale(1);
   }, [sessionId]);
 
@@ -439,6 +514,66 @@ export function RunCanvas({
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const zoomAtViewportCenter = (nextScale: number) => {
+      const rect = el.getBoundingClientRect();
+      const vx = rect.width / 2;
+      const vy = rect.height / 2;
+      const p = panRef.current;
+      const s = scaleRef.current;
+      const clamped = Math.min(
+        CANVAS_SCALE_MAX,
+        Math.max(CANVAS_SCALE_MIN, nextScale),
+      );
+      if (Math.abs(clamped - s) < 1e-6) return;
+      const cx = (vx - p.x) / s;
+      const cy = (vy - p.y) / s;
+      setPan({ x: vx - cx * clamped, y: vy - cy * clamped });
+      setScale(clamped);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!el.contains(document.activeElement)) return;
+      if (isCanvasKeyboardTargetInteractive(document.activeElement)) return;
+
+      const p = panRef.current;
+      const s = scaleRef.current;
+      let handled = false;
+
+      if (e.key === "ArrowLeft") {
+        setPan({ x: p.x - CANVAS_PAN_KEYBOARD_PX, y: p.y });
+        handled = true;
+      } else if (e.key === "ArrowRight") {
+        setPan({ x: p.x + CANVAS_PAN_KEYBOARD_PX, y: p.y });
+        handled = true;
+      } else if (e.key === "ArrowUp") {
+        setPan({ x: p.x, y: p.y - CANVAS_PAN_KEYBOARD_PX });
+        handled = true;
+      } else if (e.key === "ArrowDown") {
+        setPan({ x: p.x, y: p.y + CANVAS_PAN_KEYBOARD_PX });
+        handled = true;
+      } else if (e.key === "+" || e.key === "=") {
+        zoomAtViewportCenter(s * CANVAS_ZOOM_KEY_FACTOR);
+        handled = true;
+      } else if (e.key === "-" || e.key === "_") {
+        zoomAtViewportCenter(s / CANVAS_ZOOM_KEY_FACTOR);
+        handled = true;
+      } else if (e.key === "0") {
+        setPan({ ...CANVAS_DEFAULT_PAN });
+        setScale(1);
+        handled = true;
+      }
+
+      if (handled) e.preventDefault();
+    };
+
+    el.addEventListener("keydown", onKeyDown);
+    return () => el.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       const t = e.target as HTMLElement;
@@ -450,7 +585,9 @@ export function RunCanvas({
         return;
       }
       if (e.button !== 0) return;
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      const host = e.currentTarget as HTMLElement;
+      host.setPointerCapture(e.pointerId);
+      host.focus();
       setPanning(true);
       drag.current = {
         active: true,
@@ -505,7 +642,8 @@ export function RunCanvas({
       <div className="run-canvas-toolbar">
         <span className="muted run-canvas-hint">
           空白处拖动平移画布 · 空白处滚轮缩放 · 卡片上 Ctrl/⌘+滚轮缩放 ·
-          每行最多 {THREADS_PER_ROW} 个线程、超出自动换行 ·
+          点击空白处后可使用键盘：方向键平移 · +/− 缩放 · 0 重置视图 ·
+          每行最多 {gridLayout.threadsPerRow} 个线程、超出自动换行 ·
           每线程为松散树形流水线（评委分列、多轮串联、汇总汇聚）
         </span>
       </div>
@@ -516,6 +654,9 @@ export function RunCanvas({
             ? "run-canvas-viewport run-canvas-viewport--panning"
             : "run-canvas-viewport"
         }
+        role="region"
+        aria-label="评测流程画布，可拖动与缩放"
+        tabIndex={0}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -531,8 +672,8 @@ export function RunCanvas({
           <div
             className="run-canvas-grid"
             style={{
-              gridTemplateColumns: `repeat(${THREADS_PER_ROW}, minmax(${THREAD_GRID_COL_MIN}px, ${THREAD_GRID_COL_MAX}px))`,
-              gap: `${THREAD_GRID_GAP_PX}px`,
+              gridTemplateColumns: `repeat(${gridLayout.threadsPerRow}, minmax(${gridLayout.colMin}px, ${gridLayout.colMax}px))`,
+              gap: `${gridLayout.gap}px`,
             }}
           >
             {gens.map((g, gi) => (
@@ -545,6 +686,7 @@ export function RunCanvas({
                 aggregatorEnabled={settings.aggregator.enabled}
                 judges={settings.judges}
                 threadScores={threadScores}
+                gridColMax={gridLayout.colMax}
                 setThreadJudgeScore={setThreadJudgeScore}
                 setThreadHumanScore={setThreadHumanScore}
               />
@@ -572,6 +714,8 @@ type ThreadColumnProps = {
   aggregatorEnabled: boolean;
   judges: JudgeConfig[];
   threadScores: Record<string, ThreadScoreInput | undefined>;
+  /** 与当前视口下列宽上限一致，用于多评委时 thread-column 最小宽度 */
+  gridColMax: number;
   setThreadJudgeScore: (
     genId: string,
     judgeId: string,
@@ -589,6 +733,7 @@ function threadColumnPropsEqual(
   if (prev.judgeSlots !== next.judgeSlots) return false;
   if (prev.aggregatorEnabled !== next.aggregatorEnabled) return false;
   if (prev.judges !== next.judges) return false;
+  if (prev.gridColMax !== next.gridColMax) return false;
   if (prev.session.id !== next.session.id) return false;
   if (prev.session.phase !== next.session.phase) return false;
   if (prev.session.error !== next.session.error) return false;
@@ -605,6 +750,7 @@ function ThreadColumnInner({
   aggregatorEnabled,
   judges,
   threadScores,
+  gridColMax,
   setThreadJudgeScore,
   setThreadHumanScore,
 }: ThreadColumnProps) {
@@ -672,7 +818,7 @@ function ThreadColumnInner({
   const threadMinWidthPx =
     judges.length > 1
       ? Math.min(
-          THREAD_GRID_COL_MAX,
+          gridColMax,
           36 +
             JUDGE_COL_WIDTH_PX * judges.length +
             20 * Math.max(0, judges.length - 1),

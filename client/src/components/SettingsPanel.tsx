@@ -1,20 +1,37 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { fetchModelsList } from "../apiModels";
 import {
+  addCustomEvaluationPreset,
   applyEvaluationPreset,
-  BUILTIN_EVALUATION_PRESETS,
+  clearJudgePromptsForCurrentPresetIf,
+  customEvaluationPresetsSafe,
+  deleteCustomEvaluationPreset,
+  getEvaluationPresetSelectOptions,
   getEvaluationThemeLabel,
   POETRY_JUDGE_SYSTEM,
   POETRY_JUDGE_USER,
+  updateCustomEvaluationPresetName,
 } from "../evaluationPresets";
 import type { ApiPreset, GlobalSettings, JudgeConfig, ModelEntry } from "../types";
 import { newId, useArenaStore } from "../store";
+import {
+  applyFetchedSelection,
+  ModelFetchPickerModal,
+} from "./ModelFetchPickerModal";
+import { ConfirmModal } from "./ConfirmModal";
+import { CustomSelect } from "./CustomSelect";
 import { ModelPresetPicker } from "./ModelPresetPicker";
 
 interface Props {
   settings: GlobalSettings;
   onChange: (s: GlobalSettings) => void;
 }
+
+type DeleteConfirmState =
+  | null
+  | { kind: "customEval"; id: string; label: string }
+  | { kind: "apiPreset"; id: string; label: string }
+  | { kind: "judge"; id: string; label: string };
 
 function remapAfterRemovePreset(
   s: GlobalSettings,
@@ -37,6 +54,9 @@ function remapAfterRemovePreset(
 }
 
 export function SettingsPanel({ settings, onChange }: Props) {
+  const fid = useId().replace(/:/g, "");
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const patch = (p: Partial<GlobalSettings>) =>
     onChange({ ...settings, ...p });
 
@@ -45,10 +65,25 @@ export function SettingsPanel({ settings, onChange }: Props) {
 
   const [fetchingPresetId, setFetchingPresetId] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  /** 拉取成功后弹出选择器，确认后再写入 fetchedModelIds */
+  const [fetchPicker, setFetchPicker] = useState<{
+    presetId: string;
+    remoteIds: string[];
+    key: string;
+  } | null>(null);
   /** 各预设下「手动添加」输入框草稿 */
   const [manualDraftByPreset, setManualDraftByPreset] = useState<
     Record<string, string>
   >({});
+  const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>(null);
+
+  const customEvalNameAtFocusRef = useRef<Record<string, string>>({});
+
+  const customEvalList = customEvaluationPresetsSafe(settings);
+  const evalPresetSelectOptions = useMemo(
+    () => getEvaluationPresetSelectOptions(customEvalList, "paren"),
+    [customEvalList],
+  );
 
   const firstPresetId = settings.apiPresets[0]?.id ?? "";
 
@@ -83,9 +118,11 @@ export function SettingsPanel({ settings, onChange }: Props) {
         const s = useArenaStore.getState().settings;
         const i = s.apiPresets.findIndex((x) => x.id === presetId);
         if (i < 0) return;
-        const list = [...s.apiPresets];
-        list[i] = { ...s.apiPresets[i], fetchedModelIds: ids };
-        onChange({ ...s, apiPresets: list });
+        setFetchPicker({
+          presetId,
+          remoteIds: ids,
+          key: crypto.randomUUID(),
+        });
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") {
           setFetchError("请求超时或已中断，请稍后重试。");
@@ -100,6 +137,29 @@ export function SettingsPanel({ settings, onChange }: Props) {
       }
     },
     [settings.apiPresets, onChange],
+  );
+
+  const confirmFetchPicker = useCallback(
+    (selectedFromRemote: string[]) => {
+      if (!fetchPicker) return;
+      const s = useArenaStore.getState().settings;
+      const idx = s.apiPresets.findIndex((x) => x.id === fetchPicker.presetId);
+      if (idx < 0) {
+        setFetchPicker(null);
+        return;
+      }
+      const p = s.apiPresets[idx];
+      const nextFetched = applyFetchedSelection(
+        p.fetchedModelIds ?? [],
+        fetchPicker.remoteIds,
+        selectedFromRemote,
+      );
+      const list = [...s.apiPresets];
+      list[idx] = { ...p, fetchedModelIds: nextFetched };
+      onChange({ ...s, apiPresets: list });
+      setFetchPicker(null);
+    },
+    [fetchPicker, onChange],
   );
 
   const addPreset = () => {
@@ -144,65 +204,226 @@ export function SettingsPanel({ settings, onChange }: Props) {
     });
   };
 
-  const removePreset = (id: string) => {
-    if (settings.apiPresets.length <= 1) return;
-    const rest = settings.apiPresets.filter((p) => p.id !== id);
+  const removePreset = useCallback((id: string) => {
+    const s = useArenaStore.getState().settings;
+    if (s.apiPresets.length <= 1) return;
+    const rest = s.apiPresets.filter((p) => p.id !== id);
     const fb = rest[0]?.id ?? "";
     onChange({
-      ...remapAfterRemovePreset(settings, id, fb),
+      ...remapAfterRemovePreset(s, id, fb),
       apiPresets: rest,
     });
-  };
+  }, [onChange]);
+
+  const confirmPendingDelete = useCallback(() => {
+    if (!deleteConfirm) return;
+    const s = useArenaStore.getState().settings;
+    if (deleteConfirm.kind === "customEval") {
+      onChange(deleteCustomEvaluationPreset(s, deleteConfirm.id));
+    } else if (deleteConfirm.kind === "apiPreset") {
+      removePreset(deleteConfirm.id);
+    } else {
+      onChange({
+        ...s,
+        judges: s.judges.filter((x) => x.id !== deleteConfirm.id),
+      });
+    }
+    setDeleteConfirm(null);
+  }, [deleteConfirm, onChange, removePreset]);
 
   return (
-    <div className="panel">
-      <h2>设置</h2>
-      <p className="muted">
-        配置与评测结果保存在本机浏览器 localStorage；清除站点数据会丢失。
-      </p>
+    <div className="settings-page">
+      <div className="settings-main-card">
+        <header className="settings-main-card__head">
+          <h2 className="settings-main-card__title">设置</h2>
+          <p className="settings-main-card__lede muted">
+            配置与评测结果保存在本机浏览器 localStorage；清除站点数据会丢失。
+          </p>
+        </header>
 
-      <h3 className="section-title">
-        {getEvaluationThemeLabel(settings.evaluationPresetId)} · 预设题目
-      </h3>
-      <p className="muted small">
-        与「运行与结果」页共用同一选项。切换后将更新题目、各评委的 system/user
-        模板，并按命题家族（诗歌评测 / 算法设计 / 数学评测 / 硬件优化）同步汇总模型的默认提示词；仍可在下方「汇总模型」中单独编辑。
-      </p>
-      <div className="field">
-        <label htmlFor="eval-preset-select">预设题目</label>
-        <select
-          id="eval-preset-select"
-          value={settings.evaluationPresetId}
-          onChange={(e) =>
-            onChange(applyEvaluationPreset(settings, e.target.value))
-          }
-        >
-          {BUILTIN_EVALUATION_PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.description ? `（${p.description}）` : ""}
-            </option>
-          ))}
-        </select>
-      </div>
+        <div className="settings-cols">
+          <div className="settings-col">
+            <h3 className="settings-section-title">
+              {getEvaluationThemeLabel(
+                settings.evaluationPresetId,
+                customEvalList,
+              )}{" "}
+              · 预设题目
+            </h3>
+            <p className="muted small settings-prose">
+              与「运行与结果」页共用同一选项。切换内置题将更新题目并载入该家族默认评委模板；切换自定义题会清空评委已填模板。汇总模型的
+              system/user 提示词不会随题目切换被覆盖。
+            </p>
+            <div className="field">
+              <label htmlFor="eval-preset-select">预设题目</label>
+              <CustomSelect
+                id="eval-preset-select"
+                value={settings.evaluationPresetId}
+                onChange={(v) => onChange(applyEvaluationPreset(settings, v))}
+                options={evalPresetSelectOptions}
+              />
+            </div>
+            <div className="field eval-custom-presets">
+              <div className="eval-custom-presets__row">
+                <span className="muted small">自定义题目</span>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() => onChange(addCustomEvaluationPreset(settings))}
+                >
+                  添加自定义题目
+                </button>
+              </div>
+              {customEvalList.length > 0 && (
+                <ul className="eval-custom-presets__list">
+                  {customEvalList.map((c) => (
+                    <li key={c.id} className="eval-custom-presets__item">
+                      <input
+                        type="text"
+                        className="eval-custom-presets__name"
+                        aria-label={`自定义题目名称：${c.name}`}
+                        value={c.name}
+                        onFocus={() => {
+                          customEvalNameAtFocusRef.current[c.id] = c.name;
+                        }}
+                        onChange={(e) =>
+                          onChange(
+                            updateCustomEvaluationPresetName(
+                              settings,
+                              c.id,
+                              e.target.value,
+                            ),
+                          )
+                        }
+                        onBlur={(e) => {
+                          const prev = customEvalNameAtFocusRef.current[c.id];
+                          if (prev === undefined) return;
+                          if (e.target.value !== prev) {
+                            onChange(
+                              clearJudgePromptsForCurrentPresetIf(
+                                settingsRef.current,
+                                c.id,
+                              ),
+                            );
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm"
+                        aria-label={`删除自定义题目「${c.name}」`}
+                        onClick={() =>
+                          setDeleteConfirm({
+                            kind: "customEval",
+                            id: c.id,
+                            label: c.name,
+                          })
+                        }
+                      >
+                        删除
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
-      <h3 className="section-title">API 预设</h3>
-      <p className="muted small">
-        为不同厂商分别配置名称、Base URL、Key 与并发上限；同一预设下的参赛 / Judge
-        / 汇总请求共享该上限。「获取模型列表」或「手动添加模型
-        ID」会合并进该预设的可选列表，再在下方的参赛模型 / Judge / 汇总中选择。
-      </p>
-      {fetchError && (
-        <p className="err fetch-err fetch-err--block" role="alert">
-          {fetchError}
-        </p>
-      )}
-      {settings.apiPresets.map((preset, idx) => (
-        <div key={preset.id} className="preset-card">
+            <h3 className="settings-section-title">采样参数</h3>
+            <p className="muted small settings-prose">
+              留空则请求中不传该字段，由上游默认行为决定。
+            </p>
+            <div className="row">
+              <div className="field">
+                <label htmlFor={`${fid}-temperature`}>
+                  temperature（留空不传）
+                </label>
+                <input
+                  id={`${fid}-temperature`}
+                  type="number"
+                  step={0.1}
+                  min={0}
+                  max={2}
+                  value={
+                    settings.temperature === undefined ? "" : settings.temperature
+                  }
+                  placeholder="默认由上游决定"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") {
+                      patch({ temperature: undefined });
+                      return;
+                    }
+                    const n = Number(v);
+                    if (!Number.isNaN(n)) patch({ temperature: n });
+                  }}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor={`${fid}-max-tokens`}>
+                  max_tokens（留空不传）
+                </label>
+                <input
+                  id={`${fid}-max-tokens`}
+                  type="number"
+                  min={1}
+                  value={
+                    settings.maxTokens === undefined ? "" : settings.maxTokens
+                  }
+                  placeholder="默认由上游决定"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") {
+                      patch({ maxTokens: undefined });
+                      return;
+                    }
+                    const n = Number(v);
+                    if (!Number.isNaN(n)) patch({ maxTokens: n });
+                  }}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor={`${fid}-top-p`}>top_p（留空不传）</label>
+                <input
+                  id={`${fid}-top-p`}
+                  type="number"
+                  step={0.05}
+                  min={0}
+                  max={1}
+                  value={settings.topP === undefined ? "" : settings.topP}
+                  placeholder="默认由上游决定"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") {
+                      patch({ topP: undefined });
+                      return;
+                    }
+                    const n = Number(v);
+                    if (!Number.isNaN(n)) patch({ topP: n });
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-col">
+            <h3 className="settings-section-title">API 预设</h3>
+            <p className="muted small settings-prose">
+              为不同厂商分别配置名称、Base URL、Key 与并发上限；同一预设下的参赛 /
+              Judge / 汇总请求共享该上限。「获取模型列表」会在弹层中展示上游返回的
+              ID，可搜索并勾选后确认写入；「手动添加模型 ID」直接写入。两者合并为该预设的可选列表，再在本栏与右栏中选择。
+            </p>
+            {fetchError && (
+              <p className="err fetch-err fetch-err--block" role="alert">
+                {fetchError}
+              </p>
+            )}
+            {settings.apiPresets.map((preset, idx) => (
+              <div key={preset.id} className="settings-preset">
           <div className="row">
             <div className="field">
-              <label>预设名称</label>
+              <label htmlFor={`${fid}-preset-name-${preset.id}`}>预设名称</label>
               <input
+                id={`${fid}-preset-name-${preset.id}`}
                 value={preset.name}
                 onChange={(e) =>
                   updatePreset(idx, { ...preset, name: e.target.value })
@@ -211,8 +432,11 @@ export function SettingsPanel({ settings, onChange }: Props) {
               />
             </div>
             <div className="field flex-grow">
-              <label>Base URL（OpenAI 兼容）</label>
+              <label htmlFor={`${fid}-preset-base-${preset.id}`}>
+                Base URL（OpenAI 兼容）
+              </label>
               <input
+                id={`${fid}-preset-base-${preset.id}`}
                 value={preset.baseUrl}
                 onChange={(e) =>
                   updatePreset(idx, { ...preset, baseUrl: e.target.value })
@@ -223,8 +447,9 @@ export function SettingsPanel({ settings, onChange }: Props) {
           </div>
           <div className="row">
             <div className="field flex-grow">
-              <label>API Key</label>
+              <label htmlFor={`${fid}-preset-key-${preset.id}`}>API Key</label>
               <input
+                id={`${fid}-preset-key-${preset.id}`}
                 type="password"
                 autoComplete="off"
                 value={preset.apiKey}
@@ -235,9 +460,12 @@ export function SettingsPanel({ settings, onChange }: Props) {
               />
             </div>
             <div className="field preset-actions">
-              <label>模型列表</label>
+              <label htmlFor={`${fid}-preset-fetch-${preset.id}`}>
+                模型列表
+              </label>
               <div className="preset-actions-inner">
                 <button
+                  id={`${fid}-preset-fetch-${preset.id}`}
                   type="button"
                   className="btn-primary"
                   disabled={fetchingPresetId === preset.id}
@@ -255,8 +483,11 @@ export function SettingsPanel({ settings, onChange }: Props) {
               </div>
             </div>
             <div className="field field--fixed-120">
-              <label>并发上限</label>
+              <label htmlFor={`${fid}-preset-concurrency-${preset.id}`}>
+                并发上限
+              </label>
               <input
+                id={`${fid}-preset-concurrency-${preset.id}`}
                 type="number"
                 min={1}
                 max={64}
@@ -273,7 +504,13 @@ export function SettingsPanel({ settings, onChange }: Props) {
               <button
                 type="button"
                 className="btn-ghost"
-                onClick={() => removePreset(preset.id)}
+                onClick={() =>
+                  setDeleteConfirm({
+                    kind: "apiPreset",
+                    id: preset.id,
+                    label: preset.name,
+                  })
+                }
               >
                 删除预设
               </button>
@@ -281,9 +518,12 @@ export function SettingsPanel({ settings, onChange }: Props) {
           </div>
           <div className="row manual-model-row">
             <div className="field flex-grow">
-              <label>手动添加模型 ID（保存进该预设列表）</label>
+              <label htmlFor={`${fid}-preset-manual-${preset.id}`}>
+                手动添加模型 ID（保存进该预设列表）
+              </label>
               <div className="model-select-row">
                 <input
+                  id={`${fid}-preset-manual-${preset.id}`}
                   value={manualDraftByPreset[preset.id] ?? ""}
                   onChange={(e) =>
                     setManualDraftByPreset((d) => ({
@@ -328,74 +568,13 @@ export function SettingsPanel({ settings, onChange }: Props) {
           )}
         </div>
       ))}
-      <button type="button" className="btn-ghost" onClick={addPreset}>
-        + 添加 API 预设
-      </button>
+            <button type="button" className="btn-ghost" onClick={addPreset}>
+              + 添加 API 预设
+            </button>
 
-      <div className="row">
-        <div className="field">
-          <label>temperature（留空不传）</label>
-          <input
-            type="number"
-            step={0.1}
-            min={0}
-            max={2}
-            value={settings.temperature === undefined ? "" : settings.temperature}
-            placeholder="默认由上游决定"
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "") {
-                patch({ temperature: undefined });
-                return;
-              }
-              const n = Number(v);
-              if (!Number.isNaN(n)) patch({ temperature: n });
-            }}
-          />
-        </div>
-        <div className="field">
-          <label>max_tokens（留空不传）</label>
-          <input
-            type="number"
-            min={1}
-            value={settings.maxTokens === undefined ? "" : settings.maxTokens}
-            placeholder="默认由上游决定"
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "") {
-                patch({ maxTokens: undefined });
-                return;
-              }
-              const n = Number(v);
-              if (!Number.isNaN(n)) patch({ maxTokens: n });
-            }}
-          />
-        </div>
-        <div className="field">
-          <label>top_p（留空不传）</label>
-          <input
-            type="number"
-            step={0.05}
-            min={0}
-            max={1}
-            value={settings.topP === undefined ? "" : settings.topP}
-            placeholder="默认由上游决定"
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "") {
-                patch({ topP: undefined });
-                return;
-              }
-              const n = Number(v);
-              if (!Number.isNaN(n)) patch({ topP: n });
-            }}
-          />
-        </div>
-      </div>
-
-      <h3 className="section-title">参赛模型</h3>
-      {settings.models.map((m, idx) => (
-        <div key={m.id} className="model-entry-card">
+            <h3 className="settings-section-title">参赛模型</h3>
+            {settings.models.map((m, idx) => (
+              <div key={m.id} className="settings-stack-item">
           <div className="row align-stretch">
             <div className="field-grow">
               <ModelPresetPicker
@@ -418,8 +597,9 @@ export function SettingsPanel({ settings, onChange }: Props) {
               />
             </div>
             <div className="field field--fixed-120">
-              <label>重复次数 n</label>
+              <label htmlFor={`${fid}-model-sample-${m.id}`}>重复次数 n</label>
               <input
+                id={`${fid}-model-sample-${m.id}`}
                 type="number"
                 min={1}
                 max={50}
@@ -444,33 +624,36 @@ export function SettingsPanel({ settings, onChange }: Props) {
               删除
             </button>
           </div>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="btn-ghost"
-        onClick={() =>
-          setModels([
-            ...settings.models,
-            {
-              id: newId(),
-              presetId: firstPresetId,
-              modelId: "",
-              sampleCount: 1,
-            },
-          ])
-        }
-      >
-        + 添加模型
-      </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() =>
+                setModels([
+                  ...settings.models,
+                  {
+                    id: newId(),
+                    presetId: firstPresetId,
+                    modelId: "",
+                    sampleCount: 1,
+                  },
+                ])
+              }
+            >
+              + 添加模型
+            </button>
+          </div>
 
-      <h3 className="section-title">Judge 列表</h3>
-      {settings.judges.map((j, idx) => (
-        <div key={j.id} className="judge-card">
+          <div className="settings-col">
+            <h3 className="settings-section-title">Judge 列表</h3>
+            {settings.judges.map((j, idx) => (
+              <div key={j.id} className="settings-stack-item">
           <div className="row">
             <div className="field">
-              <label>名称</label>
+              <label htmlFor={`${fid}-judge-name-${j.id}`}>名称</label>
               <input
+                id={`${fid}-judge-name-${j.id}`}
                 value={j.name}
                 onChange={(e) => {
                   const next = [...settings.judges];
@@ -483,7 +666,11 @@ export function SettingsPanel({ settings, onChange }: Props) {
               type="button"
               className="btn-ghost align-self-end"
               onClick={() =>
-                setJudges(settings.judges.filter((x) => x.id !== j.id))
+                setDeleteConfirm({
+                  kind: "judge",
+                  id: j.id,
+                  label: j.name,
+                })
               }
             >
               删除
@@ -511,8 +698,9 @@ export function SettingsPanel({ settings, onChange }: Props) {
               />
             </div>
             <div className="field field--fixed-100">
-              <label>review 次数</label>
+              <label htmlFor={`${fid}-judge-review-${j.id}`}>review 次数</label>
               <input
+                id={`${fid}-judge-review-${j.id}`}
                 type="number"
                 min={1}
                 max={20}
@@ -529,8 +717,9 @@ export function SettingsPanel({ settings, onChange }: Props) {
             </div>
           </div>
           <div className="field">
-            <label>system</label>
+            <label htmlFor={`${fid}-judge-sys-${j.id}`}>system</label>
             <textarea
+              id={`${fid}-judge-sys-${j.id}`}
               value={j.systemPrompt}
               onChange={(e) => {
                 const next = [...settings.judges];
@@ -540,8 +729,11 @@ export function SettingsPanel({ settings, onChange }: Props) {
             />
           </div>
           <div className="field">
-            <label>user 模板（{"{{candidate}}"} 为模型对该题的候选回答）</label>
+            <label htmlFor={`${fid}-judge-user-${j.id}`}>
+              user 模板（{"{{candidate}}"} 为模型对该题的候选回答）
+            </label>
             <textarea
+              id={`${fid}-judge-user-${j.id}`}
               value={j.userPromptTemplate}
               onChange={(e) => {
                 const next = [...settings.judges];
@@ -550,103 +742,134 @@ export function SettingsPanel({ settings, onChange }: Props) {
               }}
             />
           </div>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="btn-ghost"
-        onClick={() =>
-          setJudges([
-            ...settings.judges,
-            {
-              id: newId(),
-              name: "新评委",
-              presetId: firstPresetId,
-              model: "",
-              systemPrompt: POETRY_JUDGE_SYSTEM,
-              userPromptTemplate: POETRY_JUDGE_USER,
-              reviewCount: 1,
-            },
-          ])
-        }
-      >
-        + 添加 Judge
-      </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() =>
+                setJudges([
+                  ...settings.judges,
+                  {
+                    id: newId(),
+                    name: "新评委",
+                    presetId: firstPresetId,
+                    model: "",
+                    systemPrompt: POETRY_JUDGE_SYSTEM,
+                    userPromptTemplate: POETRY_JUDGE_USER,
+                    reviewCount: 1,
+                  },
+                ])
+              }
+            >
+              + 添加 Judge
+            </button>
 
-      <h3 className="section-title">汇总模型</h3>
-      <div className="field field--switch">
-        <label className="switch-field">
-          <input
-            type="checkbox"
-            className="switch-field__input"
-            checked={settings.aggregator.enabled}
-            onChange={(e) =>
-              patch({
-                aggregator: {
-                  ...settings.aggregator,
-                  enabled: e.target.checked,
-                },
-              })
-            }
-          />
-          <span className="switch-field__control" aria-hidden="true" />
-          <span className="switch-field__text">启用汇总（全链路流式）</span>
-        </label>
+            <h3 className="settings-section-title">汇总模型</h3>
+            <div className="field field--switch">
+              <label className="switch-field">
+                <input
+                  type="checkbox"
+                  className="switch-field__input"
+                  checked={settings.aggregator.enabled}
+                  onChange={(e) =>
+                    patch({
+                      aggregator: {
+                        ...settings.aggregator,
+                        enabled: e.target.checked,
+                      },
+                    })
+                  }
+                />
+                <span className="switch-field__control" aria-hidden="true" />
+                <span className="switch-field__text">启用汇总（全链路流式）</span>
+              </label>
+            </div>
+            <div className="settings-aggregator">
+              <ModelPresetPicker
+                presets={settings.apiPresets}
+                presetId={settings.aggregator.presetId}
+                modelId={settings.aggregator.model}
+                modelsByPreset={mergedModelsByPreset}
+                onPresetChange={(presetId) =>
+                  patch({
+                    aggregator: { ...settings.aggregator, presetId },
+                  })
+                }
+                onModelChange={(model) =>
+                  patch({
+                    aggregator: { ...settings.aggregator, model },
+                  })
+                }
+                onRefreshModels={() =>
+                  fetchForPreset(settings.aggregator.presetId)
+                }
+                refreshPending={
+                  fetchingPresetId === settings.aggregator.presetId
+                }
+              />
+              <div className="field">
+                <label htmlFor={`${fid}-agg-system`}>system</label>
+                <textarea
+                  id={`${fid}-agg-system`}
+                  value={settings.aggregator.systemPrompt}
+                  onChange={(e) =>
+                    patch({
+                      aggregator: {
+                        ...settings.aggregator,
+                        systemPrompt: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="field">
+                <label htmlFor={`${fid}-agg-user`}>
+                  user 模板（{"{{candidate}}"}、{"{{reviews}}"}）
+                </label>
+                <textarea
+                  id={`${fid}-agg-user`}
+                  value={settings.aggregator.userPromptTemplate}
+                  onChange={(e) =>
+                    patch({
+                      aggregator: {
+                        ...settings.aggregator,
+                        userPromptTemplate: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div className="aggregator-card">
-        <ModelPresetPicker
-          presets={settings.apiPresets}
-          presetId={settings.aggregator.presetId}
-          modelId={settings.aggregator.model}
-          modelsByPreset={mergedModelsByPreset}
-          onPresetChange={(presetId) =>
-            patch({
-              aggregator: { ...settings.aggregator, presetId },
-            })
-          }
-          onModelChange={(model) =>
-            patch({
-              aggregator: { ...settings.aggregator, model },
-            })
-          }
-          onRefreshModels={() =>
-            fetchForPreset(settings.aggregator.presetId)
-          }
-          refreshPending={
-            fetchingPresetId === settings.aggregator.presetId
-          }
+      {fetchPicker && (
+        <ModelFetchPickerModal
+          key={fetchPicker.key}
+          remoteIds={fetchPicker.remoteIds}
+          initialCheckedIds={(
+            settings.apiPresets.find((x) => x.id === fetchPicker.presetId)
+              ?.fetchedModelIds ?? []
+          ).filter((id) => fetchPicker.remoteIds.includes(id))}
+          onConfirm={confirmFetchPicker}
+          onCancel={() => setFetchPicker(null)}
         />
-        <div className="field">
-          <label>system</label>
-          <textarea
-            value={settings.aggregator.systemPrompt}
-            onChange={(e) =>
-              patch({
-                aggregator: {
-                  ...settings.aggregator,
-                  systemPrompt: e.target.value,
-                },
-              })
-            }
-          />
-        </div>
-        <div className="field">
-          <label>
-            user 模板（{"{{candidate}}"}、{"{{reviews}}"}）
-          </label>
-          <textarea
-            value={settings.aggregator.userPromptTemplate}
-            onChange={(e) =>
-              patch({
-                aggregator: {
-                  ...settings.aggregator,
-                  userPromptTemplate: e.target.value,
-                },
-              })
-            }
-          />
-        </div>
-      </div>
+      )}
+      {deleteConfirm && (
+        <ConfirmModal
+          title="确认删除"
+          message={
+            deleteConfirm.kind === "customEval"
+              ? `确定要删除自定义题目「${deleteConfirm.label}」吗？删除后无法恢复。`
+              : deleteConfirm.kind === "apiPreset"
+                ? `确定要删除 API 预设「${deleteConfirm.label}」吗？使用该预设的参赛模型、Judge 与汇总将自动改绑到列表中剩余的第一个预设。`
+                : `确定要删除评委「${deleteConfirm.label}」吗？删除后无法恢复。`
+          }
+          onConfirm={confirmPendingDelete}
+          onCancel={() => setDeleteConfirm(null)}
+        />
+      )}
     </div>
   );
 }

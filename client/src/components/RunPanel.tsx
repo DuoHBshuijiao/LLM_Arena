@@ -1,12 +1,14 @@
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { uniqueModelIds } from "../chartUtils";
 import {
-  BUILTIN_EVALUATION_PRESETS,
+  customEvaluationPresetsSafe,
+  getEvaluationPresetSelectOptions,
   getEvaluationThemeLabel,
 } from "../evaluationPresets";
 import { averageCompositeByModel, clampBlendWeight } from "../scoreCalculations";
 import { settingsReadyForRun } from "../settingsHelpers";
 import type { BlendWeights, GlobalSettings, RunSession, ThreadScoreInput } from "../types";
+import { CustomSelect } from "./CustomSelect";
 import { RunCanvas } from "./RunCanvas";
 
 function phaseLabel(phase: string): string {
@@ -78,8 +80,14 @@ export function RunPanel({
   running,
   phase,
 }: Props) {
+  const taskPromptFieldId = useId();
   const est = useMemo(() => estimateCalls(settings), [settings]);
   const ready = useMemo(() => settingsReadyForRun(settings), [settings]);
+  const customEvalList = customEvaluationPresetsSafe(settings);
+  const runEvalPresetOptions = useMemo(
+    () => getEvaluationPresetSelectOptions(customEvalList, "emdash"),
+    [customEvalList],
+  );
 
   const judgeIds = useMemo(
     () => settings.judges.map((j) => j.id),
@@ -116,29 +124,31 @@ export function RunPanel({
 
         <div className="field run-page__preset-field">
           <label htmlFor="run-eval-preset">
-            预设题目（{getEvaluationThemeLabel(settings.evaluationPresetId)}）
+            预设题目（
+            {getEvaluationThemeLabel(
+              settings.evaluationPresetId,
+              customEvalList,
+            )}
+            ）
           </label>
-          <select
+          <CustomSelect
             id="run-eval-preset"
             value={settings.evaluationPresetId}
-            onChange={(e) => onEvaluationPresetChange(e.target.value)}
+            onChange={onEvaluationPresetChange}
             disabled={running}
-          >
-            {BUILTIN_EVALUATION_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-                {p.description ? ` — ${p.description}` : ""}
-              </option>
-            ))}
-          </select>
+            options={runEvalPresetOptions}
+          />
           <p className="muted small run-page__preset-hint">
-            切换后将载入该题全文并同步评委与汇总默认提示词（按诗歌评测 / 算法设计 / 数学评测 / 硬件优化）；可在下方继续微调题目，也可在「设置」中再改汇总文案。
+            切换内置题将载入该题全文与家族默认评委模板；切换自定义题会清空评委模板。汇总模型提示词不随题目切换被覆盖；可在下方继续编辑题目，或在「设置」中管理自定义题与汇总文案。
           </p>
         </div>
 
         <div className="field">
-          <label>提示词（评测题目与要求）</label>
+          <label htmlFor={taskPromptFieldId}>
+            提示词（评测题目与要求）
+          </label>
           <textarea
+            id={taskPromptFieldId}
             value={settings.taskPrompt}
             onChange={(e) => onTaskPromptChange(e.target.value)}
             disabled={running}
@@ -204,7 +214,7 @@ export function RunPanel({
               同一条评测提示词按 API 预设的并发上限流式调用：各线程生成完成后立即进入
               Judge（多评委限流并行），再按需汇总。并发上限在「设置」的每个 API
               预设中配置，同一预设下的参赛 / Judge / 汇总共享。
-              {`当前评测主题为「${getEvaluationThemeLabel(settings.evaluationPresetId)}」，可在上方切换内置预设题目。`}
+              {`当前评测主题为「${getEvaluationThemeLabel(settings.evaluationPresetId, customEvalList)}」，可在上方切换预设题目。`}
               评测结束后在线程下方填入人工分，并在「分数计算器」中查看按模型的最终得分（≤10）。与按模型的整体验收对比见「人工分与图表」标签页。
             </p>
           </div>

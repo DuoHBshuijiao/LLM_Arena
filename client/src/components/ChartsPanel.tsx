@@ -74,10 +74,13 @@ export function ChartsPanel({
         <>
           <div className="table-wrap charts-panel__table-wrap">
             <table>
+              <caption className="visually-hidden">
+                按模型填写整体验收人工分，与自动汇总对比
+              </caption>
               <thead>
                 <tr>
-                  <th>模型</th>
-                  <th>整体验收人工分（0–10）</th>
+                  <th scope="col">模型</th>
+                  <th scope="col">整体验收人工分（0–10）</th>
                 </tr>
               </thead>
               <tbody>
@@ -90,6 +93,7 @@ export function ChartsPanel({
                         min={0}
                         max={10}
                         step={0.5}
+                        aria-label={`整体验收人工分（0–10），模型：${r.modelId}`}
                         className="charts-panel__human-input"
                         value={
                           r.human !== undefined && !Number.isNaN(r.human)
@@ -118,11 +122,20 @@ export function ChartsPanel({
 
           <div className="charts-panel__chart">
             <ResponsiveContainer>
-              <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 48 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+              <BarChart
+                data={chartData}
+                margin={{ top: 8, right: 8, left: 8, bottom: 48 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="var(--color-border)"
+                />
                 <XAxis
                   dataKey="name"
-                  tick={{ fill: "var(--color-muted)", fontSize: 12 }}
+                  tick={{
+                    fill: "var(--color-muted)",
+                    fontSize: "var(--text-caption)",
+                  }}
                   interval={0}
                   angle={-25}
                   textAnchor="end"
@@ -130,7 +143,10 @@ export function ChartsPanel({
                 />
                 <YAxis
                   domain={[0, 10]}
-                  tick={{ fill: "var(--color-muted)", fontSize: 12 }}
+                  tick={{
+                    fill: "var(--color-muted)",
+                    fontSize: "var(--text-caption)",
+                  }}
                 />
                 <Tooltip
                   contentStyle={{
