@@ -1,21 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { SettingsPanel } from "./components/SettingsPanel";
-import { applyEvaluationPreset } from "./evaluationPresets";
-import { useArenaStore } from "./store";
-
-const RunPanel = lazy(() =>
-  import("./components/RunPanel").then((m) => ({ default: m.RunPanel })),
-);
-const ChartsPanel = lazy(() =>
-  import("./components/ChartsPanel").then((m) => ({ default: m.ChartsPanel })),
-);
-
-function prefetchRunPanel() {
-  void import("./components/RunPanel");
-}
-function prefetchChartsPanel() {
-  void import("./components/ChartsPanel");
-}
+import { useCallback, useEffect, useState } from "react";
+import {
+  ChartsTabPane,
+  prefetchChartsPanel,
+  prefetchRunPanel,
+  RunTabPane,
+  SettingsTabPane,
+} from "./components/AppTabContent";
 
 type Tab = "settings" | "run" | "charts";
 
@@ -44,28 +34,11 @@ export default function App() {
     checkProxyHealth();
   }, [checkProxyHealth]);
 
-  const settings = useArenaStore((s) => s.settings);
-  const setSettings = useArenaStore((s) => s.setSettings);
-  const lastRun = useArenaStore((s) => s.lastRun);
-  const humanScores = useArenaStore((s) => s.humanScores);
-  const threadScores = useArenaStore((s) => s.threadScores);
-  const blendWeights = useArenaStore((s) => s.blendWeights);
-  const updateHumanScore = useArenaStore((s) => s.updateHumanScore);
-  const setThreadJudgeScore = useArenaStore((s) => s.setThreadJudgeScore);
-  const setThreadHumanScore = useArenaStore((s) => s.setThreadHumanScore);
-  const setJudgeBlendWeight = useArenaStore((s) => s.setJudgeBlendWeight);
-  const setHumanBlendWeight = useArenaStore((s) => s.setHumanBlendWeight);
-  const runEvaluation = useArenaStore((s) => s.runEvaluation);
-  const cancelRun = useArenaStore((s) => s.cancelRun);
-  const clearLastRun = useArenaStore((s) => s.clearLastRun);
-
-  const running =
-    lastRun !== null &&
-    lastRun.phase !== "done" &&
-    lastRun.phase !== "error";
-
   return (
-    <div className={`app ${tab === "run" ? "app--wide" : ""}`}>
+    <div className="app">
+      <a href="#main-content" className="skip-link">
+        跳到主内容
+      </a>
       <header className="app-header">
         <h1 className="app-title">
           <span className="app-title__mark">LLM</span>{" "}
@@ -113,68 +86,11 @@ export default function App() {
         </nav>
       </header>
 
-      <div className="app-tab-panel" key={tab}>
-        {tab === "settings" && (
-          <SettingsPanel settings={settings} onChange={setSettings} />
-        )}
-        {tab === "run" && (
-          <Suspense
-            fallback={
-              <div className="panel panel-loading">
-                <p className="muted">加载运行面板…</p>
-              </div>
-            }
-          >
-            <RunPanel
-              settings={settings}
-              session={lastRun}
-              threadScores={threadScores}
-              blendWeights={blendWeights}
-              setThreadJudgeScore={setThreadJudgeScore}
-              setThreadHumanScore={setThreadHumanScore}
-              setJudgeBlendWeight={setJudgeBlendWeight}
-              setHumanBlendWeight={setHumanBlendWeight}
-              onRun={(p) => runEvaluation(p)}
-              onCancel={cancelRun}
-              onClearSession={clearLastRun}
-              onTaskPromptChange={(taskPrompt) =>
-                setSettings({
-                  ...useArenaStore.getState().settings,
-                  taskPrompt,
-                })
-              }
-              onEvaluationPresetChange={(presetId) =>
-                setSettings(
-                  applyEvaluationPreset(
-                    useArenaStore.getState().settings,
-                    presetId,
-                  ),
-                )
-              }
-              running={running}
-              phase={lastRun?.phase ?? "idle"}
-            />
-          </Suspense>
-        )}
-        {tab === "charts" && (
-          <Suspense
-            fallback={
-              <div className="panel panel-loading">
-                <p className="muted">加载图表…</p>
-              </div>
-            }
-          >
-            <ChartsPanel
-              generations={lastRun?.generations ?? []}
-              humanScores={humanScores}
-              onHumanChange={updateHumanScore}
-              threadScores={threadScores}
-              blendWeights={blendWeights}
-              judgeIds={settings.judges.map((j) => j.id)}
-            />
-          </Suspense>
-        )}
-      </div>
+      <main id="main-content" className="app-tab-panel" key={tab}>
+        {tab === "settings" && <SettingsTabPane />}
+        {tab === "run" && <RunTabPane />}
+        {tab === "charts" && <ChartsTabPane />}
+      </main>
     </div>
   );
 }
