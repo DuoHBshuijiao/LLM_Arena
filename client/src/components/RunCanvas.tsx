@@ -400,12 +400,16 @@ function ThreadPipelineEdges({
   const markerId = `flow-edge-m-${uid}`;
   const [segments, setSegments] = useState<EdgeSeg[]>([]);
   const [box, setBox] = useState({ w: 0, h: 0 });
+  /** 避免布局抖动时 offset 短暂为 0 导致 SVG 卸载、或线段被清空 */
+  const lastGoodBoxRef = useRef({ w: 0, h: 0 });
 
   const recompute = useCallback(() => {
     const tree = treeRef.current;
     const genEl = genRef.current;
-    if (!tree || !genEl) {
-      setSegments([]);
+    if (!tree) {
+      return;
+    }
+    if (!genEl) {
       return;
     }
     const summaryEl = summaryRef?.current ?? null;
@@ -436,6 +440,15 @@ function ThreadPipelineEdges({
 
   useLayoutEffect(() => {
     recompute();
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      recompute();
+      raf2 = requestAnimationFrame(() => recompute());
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
   }, [recompute, layoutRevision]);
 
   useLayoutEffect(() => {
@@ -444,7 +457,14 @@ function ThreadPipelineEdges({
     const sync = () => {
       const w = Math.max(tree.offsetWidth, tree.scrollWidth);
       const h = Math.max(tree.offsetHeight, tree.scrollHeight);
-      setBox({ w, h });
+      if (w > 0 && h > 0) {
+        lastGoodBoxRef.current = { w, h };
+        setBox({ w, h });
+      } else if (lastGoodBoxRef.current.w > 0 && lastGoodBoxRef.current.h > 0) {
+        setBox({ ...lastGoodBoxRef.current });
+      } else {
+        setBox({ w, h });
+      }
       requestAnimationFrame(recompute);
     };
     sync();
@@ -453,8 +473,10 @@ function ThreadPipelineEdges({
     return () => ro.disconnect();
   }, [treeRef, recompute]);
 
-  const w = box.w;
-  const h = box.h;
+  const w =
+    box.w > 0 && box.h > 0 ? box.w : lastGoodBoxRef.current.w;
+  const h =
+    box.h > 0 && box.w > 0 ? box.h : lastGoodBoxRef.current.h;
 
   if (w <= 0 || h <= 0) {
     return null;
@@ -495,6 +517,19 @@ function ThreadPipelineEdges({
       ))}
     </svg>
   );
+}
+
+/** 导出 PNG 前移除入场动画类，避免 html-to-image 在动画首帧把 opacity:0 内联进快照。 */
+function stripRunCanvasEntryAnimationsForExport(root: HTMLElement) {
+  root.querySelectorAll(".thread-column--animate").forEach((el) => {
+    el.classList.remove("thread-column--animate");
+  });
+  root.querySelectorAll(".run-canvas-card--pop").forEach((el) => {
+    el.classList.remove("run-canvas-card--pop");
+  });
+  root.querySelectorAll(".thread-score-bar--animate").forEach((el) => {
+    el.classList.remove("thread-score-bar--animate");
+  });
 }
 
 interface RunCanvasProps {
@@ -647,6 +682,7 @@ export function RunCanvas({
       bg && bg !== "rgba(0, 0, 0, 0)" ? bg : "oklch(0.22 0.02 260)";
     const clone = grid.cloneNode(true) as HTMLElement;
     wrap.appendChild(clone);
+    stripRunCanvasEntryAnimationsForExport(clone);
     document.body.appendChild(wrap);
     try {
       const dataUrl = await toPng(wrap, {
