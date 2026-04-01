@@ -1,4 +1,8 @@
 /** 算法设计评测 — 题目与评委/汇总模板（与 evaluationPresets 组合使用） */
+import {
+  SHARED_AGGREGATOR_SYSTEM,
+  SHARED_AGGREGATOR_USER,
+} from "./aggregatorSharedPrompts";
 
 export const EVAL_PRESET_ALGO_ANN_TRILLION = "algo-ann-trillion-vectors";
 export const EVAL_PRESET_ALGO_DYNAMIC_GRAPH_OOD = "algo-dynamic-graph-ood";
@@ -155,20 +159,9 @@ export const ALGORITHM_JUDGE_USER = `【参赛方案】
 
 请根据上述评审标准，先按四个维度逐项分析，再给出 1–10 分的总分与简要结论。`;
 
-export const ALGORITHM_AGGREGATOR_SYSTEM = `你是一个结果汇总助手。你的任务是将多位 Judge 对同一篇算法设计答卷的评分与评语进行简洁归纳。
-要求：
-1. 只整理评委的原意和分数，不加入自己的任何评价、判断或补充。
-2. 按评委模型名称分别列出，不得使用「评委1」「评委2」等匿名指代。
-3. 总字数不超过200字。
-4. 输出语言为中文。`;
+export const ALGORITHM_AGGREGATOR_SYSTEM = SHARED_AGGREGATOR_SYSTEM;
 
-export const ALGORITHM_AGGREGATOR_USER = `【参赛答卷】
-{{candidate}}
-
-【各评委评价】
-{{reviews}}
-
-请按上述要求，汇总每位评委的意见与分数，只呈现评委模型原名及对应内容，不做额外评价。`;
+export const ALGORITHM_AGGREGATOR_USER = SHARED_AGGREGATOR_USER;
 
 export function getAlgorithmAggregatorPartial(): {
   systemPrompt: string;
