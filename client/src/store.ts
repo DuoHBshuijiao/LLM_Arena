@@ -1,3 +1,7 @@
+/**
+ * 全局状态：评测配置持久化、单次运行会话、线程分与混合权重。
+ * 与 pipeline 协作通过 AbortController 区分「整轮取消」与「单线程 resume」。
+ */
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { userFacingEvaluationError } from "./errorUtils";
@@ -142,6 +146,13 @@ interface ArenaState {
   blendWeights: BlendWeights;
   setSettings: (s: GlobalSettings) => void;
   updateHumanScore: (modelId: string, score: number | undefined) => void;
+  /** 图表页「整体验收」人工分：一键清空当前已保存的全部模型分（不影响线程内评委分） */
+  clearAllHumanScores: () => void;
+  /**
+   * 按顺序对当前会话中仍处于失败且可恢复（含 failedPipelineStep）的线程依次调用恢复。
+   * 与单线程「重试」共用同一套 resume 逻辑，避免并行 resume 争抢 resumeAbortRef。
+   */
+  resumeAllFailedThreads: () => Promise<void>;
   setThreadJudgeScore: (
     genId: string,
     judgeId: string,
@@ -232,6 +243,8 @@ export const useArenaStore = create<ArenaState>()(
           }
           return { humanScores: next };
         }),
+
+      clearAllHumanScores: () => set({ humanScores: {} }),
 
       clearLastRun: () => set({ lastRun: null, threadScores: {} }),
 

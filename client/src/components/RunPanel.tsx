@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import {
   sortModelIdsByValue,
   uniqueModelIds,
@@ -105,6 +105,17 @@ export function RunPanel({
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [savingScores, setSavingScores] = useState(false);
   const [saveScoreMessage, setSaveScoreMessage] = useState<string | null>(null);
+  const [retryAllFailedBusy, setRetryAllFailedBusy] = useState(false);
+  const resumeAllFailedThreads = useArenaStore((s) => s.resumeAllFailedThreads);
+
+  const handleRetryAllFailedThreads = useCallback(async () => {
+    setRetryAllFailedBusy(true);
+    try {
+      await resumeAllFailedThreads();
+    } finally {
+      setRetryAllFailedBusy(false);
+    }
+  }, [resumeAllFailedThreads]);
   const [finalScoreSortDir, setFinalScoreSortDir] =
     useState<SortDirection>("asc");
   const taskPromptFieldId = useId();
@@ -453,6 +464,9 @@ export function RunPanel({
         setThreadJudgeScore={setThreadJudgeScore}
         setThreadHumanScore={setThreadHumanScore}
         onRetryThread={onRetryThread}
+        onRetryAllFailedThreads={handleRetryAllFailedThreads}
+        retryAllFailedBusy={retryAllFailedBusy}
+        running={running}
         onAbandonThread={onAbandonThread}
         onPauseThread={onPauseThread}
         onAbortJudgeSlot={onAbortJudgeSlot}

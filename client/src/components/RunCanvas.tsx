@@ -543,6 +543,12 @@ interface RunCanvasProps {
   ) => void;
   setThreadHumanScore: (genId: string, score: number | undefined) => void;
   onRetryThread: (genId: string) => void;
+  /** 依次恢复所有「可重试」的失败线程（与单线程重试互斥，由 store 串行化） */
+  onRetryAllFailedThreads?: () => Promise<void>;
+  /** 批量重试进行中，禁用按钮 */
+  retryAllFailedBusy?: boolean;
+  /** 整轮评测运行中时不提供批量重试，避免与流水线状态冲突 */
+  running?: boolean;
   onAbandonThread: (genId: string) => void;
   onPauseThread: (genId: string) => void;
   onAbortJudgeSlot: (
@@ -560,6 +566,9 @@ export function RunCanvas({
   setThreadJudgeScore,
   setThreadHumanScore,
   onRetryThread,
+  onRetryAllFailedThreads,
+  retryAllFailedBusy = false,
+  running = false,
   onAbandonThread,
   onPauseThread,
   onAbortJudgeSlot,
@@ -610,6 +619,15 @@ export function RunCanvas({
   }, [gridLayout, viewportWidth, settings.judges.length]);
 
   const sessionId = session?.id;
+
+  const failedRetryableCount = useMemo(() => {
+    if (!session?.generations.length) return 0;
+    return session.generations.filter(
+      (g) =>
+        g.threadOutcome === "error" && g.failedPipelineStep !== undefined,
+    ).length;
+  }, [session]);
+
   useEffect(() => {
     setPan({ ...CANVAS_DEFAULT_PAN });
     setScale(1);
@@ -868,6 +886,28 @@ export function RunCanvas({
           >
             {exportingPng ? "导出中…" : "导出 PNG"}
           </button>
+          {onRetryAllFailedThreads ? (
+            <button
+              type="button"
+              className="btn-ghost btn-sm run-canvas-toolbar__btn"
+              disabled={
+                running ||
+                failedRetryableCount === 0 ||
+                retryAllFailedBusy
+              }
+              aria-label={`批量重试失败线程，当前可恢复 ${failedRetryableCount} 条`}
+              title={
+                failedRetryableCount === 0
+                  ? "当前没有可从失败点恢复的线程"
+                  : `按顺序重试 ${failedRetryableCount} 条失败线程（与单线程「重试」相同逻辑）`
+              }
+              onClick={() => void onRetryAllFailedThreads()}
+            >
+              {retryAllFailedBusy
+                ? "批量重试中…"
+                : `批量重试失败（${failedRetryableCount}）`}
+            </button>
+          ) : null}
         </div>
         <span className="muted run-canvas-hint">
           空白处拖动平移画布 · 空白处滚轮缩放 · 卡片上 Ctrl/⌘+滚轮缩放 ·
