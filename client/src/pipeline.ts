@@ -1,3 +1,6 @@
+/**
+ * 评测流水线：按 API 预设并发限制跑生成 → 多评委 → 可选汇总；流式更新经 RAF 合并以减负渲染。
+ */
 import pLimit from "p-limit";
 import { userFacingEvaluationError } from "./errorUtils";
 import { stripCompleteRedactedThinking } from "./inlineThinking";

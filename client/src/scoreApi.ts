@@ -1,3 +1,7 @@
+/**
+ * 成绩快照与历史列表的 HTTP 封装。
+ * 浏览器仅访问同源 `/api/*`，由 Vite 开发代理或生产环境反代转到 Node（见 server/index.mjs）。
+ */
 import type { SavedScoreSnapshot, ScoreHistoryExportFile } from "./types";
 
 /** 经 Vite 代理到本地 Node 服务，写入仓库根目录下 data/scores */

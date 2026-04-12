@@ -1,3 +1,8 @@
+/**
+ * OpenAI 兼容 Chat Completions 的流式解析（SSE/data: 行）。
+ * 请求发往本地代理 `/api/proxy/v1/chat/completions`，由服务端转发上游并原样流式返回。
+ * 同时处理 reasoning / 多段 content 数组等厂商差异。
+ */
 import type { ChatCompletionCreateParams } from "./openaiTypes";
 import { normalizeProxyBaseUrl } from "./apiModels";
 import {
