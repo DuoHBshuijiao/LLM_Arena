@@ -519,6 +519,56 @@ pre {
     0 0 0 1px color-mix(in oklch, var(--color-rose-gold-faint) 65%, transparent);
 }
 
+/* 顶栏：快捷键说明（与主导航同级，避免占用 Ctrl+数字等浏览器默认行为） */
+.app-shortcuts {
+  grid-column: 1 / -1;
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 10px;
+  border: 1px solid var(--color-border-soft);
+  background: color-mix(in oklch, var(--color-surface-muted) 88%, var(--color-surface));
+}
+
+.app-shortcuts__summary {
+  cursor: pointer;
+  font-size: var(--text-secondary);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-dim);
+  list-style: none;
+}
+
+.app-shortcuts__summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-shortcuts__summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.app-shortcuts[open] .app-shortcuts__summary::before {
+  transform: rotate(90deg);
+}
+
+.app-shortcuts__body {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-soft);
+}
+
+.app-shortcuts__note {
+  margin: 0 0 var(--space-2);
+}
+
+.app-shortcuts__list {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: var(--text-secondary);
+  color: var(--color-text-dim);
+  line-height: 1.65;
+}
+
 .panel {
   background: var(--color-surface);
   border: 1px solid var(--color-border);

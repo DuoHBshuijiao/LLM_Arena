@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { clampScore10 } from "../errorUtils";
+import { ConfirmModal } from "./ConfirmModal";
 import {
   Bar,
   BarChart,
@@ -45,6 +46,8 @@ interface Props {
   generations: GenerationResult[];
   humanScores: Record<string, number>;
   onHumanChange: (modelId: string, score: number | undefined) => void;
+  /** 批量清空「整体验收」列（图表页专用，不影响线程内评委分） */
+  onClearAllHumanScores?: () => void;
   threadScores: Record<string, ThreadScoreInput | undefined>;
   blendWeights: BlendWeights;
   judgeIds: string[];
@@ -65,6 +68,7 @@ export function ChartsPanel({
   generations,
   humanScores,
   onHumanChange,
+  onClearAllHumanScores,
   threadScores,
   blendWeights,
   judgeIds,
@@ -73,6 +77,7 @@ export function ChartsPanel({
 }: Props) {
   const [chartsSortKey, setChartsSortKey] = useState<ChartsSortKey>("model");
   const [chartsSortDir, setChartsSortDir] = useState<SortDirection>("asc");
+  const [clearHumanOpen, setClearHumanOpen] = useState(false);
 
   const modelIds = uniqueModelIds(generations);
   const autoMap = averageAutoScoreByModel(
@@ -116,6 +121,15 @@ export function ChartsPanel({
   }));
 
   const hasAny = modelIds.length > 0;
+
+  const humanFilledCount = useMemo(
+    () =>
+      modelIds.filter((id) => {
+        const v = humanScores[id];
+        return v !== undefined && !Number.isNaN(v);
+      }).length,
+    [modelIds, humanScores],
+  );
 
   return (
     <div className="panel">
@@ -267,6 +281,30 @@ export function ChartsPanel({
 
       {hasAny && (
         <>
+          <div className="charts-panel__batch-row">
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              disabled={readOnly || !onClearAllHumanScores || humanFilledCount === 0}
+              title="清空本页表格中所有模型的整体验收人工分（可重新填写）"
+              onClick={() => setClearHumanOpen(true)}
+            >
+              清空全部整体验收分
+            </button>
+            {clearHumanOpen && onClearAllHumanScores ? (
+              <ConfirmModal
+                title="清空整体验收人工分？"
+                message="将移除当前会话中所有模型行的整体验收分，不会改动「运行与结果」里各线程的评委分与线程人工分。"
+                confirmLabel="确认清空"
+                cancelLabel="取消"
+                onConfirm={() => {
+                  onClearAllHumanScores();
+                  setClearHumanOpen(false);
+                }}
+                onCancel={() => setClearHumanOpen(false)}
+              />
+            ) : null}
+          </div>
           <div className="charts-panel__sort-row">
             <label className="charts-panel__sort-label" htmlFor="charts-sort-key">
               排序
@@ -369,7 +407,11 @@ export function ChartsPanel({
             </table>
           </div>
 
-          <div className="charts-panel__chart">
+          <div
+            className="charts-panel__chart"
+            role="img"
+            aria-label="柱状图：各模型自动汇总与整体验收人工分对比（数值见 Tooltip）"
+          >
             <ResponsiveContainer>
               <BarChart
                 data={chartData}

@@ -126,6 +126,7 @@ export function ChartsTabPane() {
   const threadScores = useArenaStore((s) => s.threadScores);
   const blendWeights = useArenaStore((s) => s.blendWeights);
   const updateHumanScore = useArenaStore((s) => s.updateHumanScore);
+  const clearAllHumanScores = useArenaStore((s) => s.clearAllHumanScores);
   const judges = useArenaStore((s) => s.settings.judges);
   const judgeIds = useMemo(() => judges.map((j) => j.id), [judges]);
 
@@ -206,6 +207,9 @@ export function ChartsTabPane() {
         generations={view.generations}
         humanScores={view.humanScores}
         onHumanChange={updateHumanScore}
+        onClearAllHumanScores={
+          view.readOnly ? undefined : clearAllHumanScores
+        }
         threadScores={view.threadScores}
         blendWeights={view.blendWeights}
         judgeIds={view.judgeIds}

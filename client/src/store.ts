@@ -289,6 +289,21 @@ export const useArenaStore = create<ArenaState>()(
         });
       },
 
+      resumeAllFailedThreads: async () => {
+        const lr0 = get().lastRun;
+        if (!lr0?.generations.length) return;
+        const ids = lr0.generations
+          .filter(
+            (g) =>
+              g.threadOutcome === "error" &&
+              g.failedPipelineStep !== undefined,
+          )
+          .map((g) => g.id);
+        for (const genId of ids) {
+          await get().resumeThreadEvaluation(genId);
+        }
+      },
+
       resumeThreadEvaluation: async (genId) => {
         const settings = get().settings;
         const lastRun = get().lastRun;
