@@ -1719,6 +1719,14 @@ details.gen pre {
   margin-top: var(--space-2);
 }
 
+.charts-panel__batch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
 .charts-panel__sort-row {
   display: flex;
   flex-wrap: wrap;
