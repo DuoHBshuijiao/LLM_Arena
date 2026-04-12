@@ -241,15 +241,19 @@ app.get("/scores", async (_req, res) => {
       names = [];
     }
     const jsonFiles = names.filter((n) => n.endsWith(".json"));
-    const entries = [];
-    for (const name of jsonFiles) {
-      try {
-        const raw = await fs.readFile(path.join(SCORES_DIR, name), "utf8");
-        entries.push(JSON.parse(raw));
-      } catch (e) {
-        console.warn("[scores] skip invalid file:", name, e);
-      }
-    }
+    /** 并行读取各快照文件；条数通常较少，磁盘顺序读在本地开发环境下足够快 */
+    const parsed = await Promise.all(
+      jsonFiles.map(async (name) => {
+        try {
+          const raw = await fs.readFile(path.join(SCORES_DIR, name), "utf8");
+          return JSON.parse(raw);
+        } catch (e) {
+          console.warn("[scores] skip invalid file:", name, e);
+          return null;
+        }
+      }),
+    );
+    const entries = parsed.filter(Boolean);
     entries.sort((a, b) => (b?.savedAt ?? 0) - (a?.savedAt ?? 0));
     res.json({ entries });
   } catch (e) {
